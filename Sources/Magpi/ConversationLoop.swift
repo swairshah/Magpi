@@ -92,8 +92,12 @@ final class ConversationLoop: ObservableObject {
             print("Magpi: Loading Silero VAD...")
             sileroVAD = try SileroVAD()
 
-            print("Magpi: Loading Smart Turn...")
-            smartTurn = try SmartTurnDetector()
+            // Smart Turn disabled — model expects mel spectrogram input (input_features [B,80,800])
+            // not raw audio. Need to implement mel spectrogram extraction first.
+            // For now, rely on VAD silence detection + timeout for turn detection.
+            // print("Magpi: Loading Smart Turn...")
+            // smartTurn = try SmartTurnDetector()
+            print("Magpi: Smart Turn disabled (needs mel spectrogram preprocessing)")
 
             // Find STT model
             if let modelPath = Transcriber.findModelPath() {

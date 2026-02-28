@@ -5,13 +5,12 @@ import AVFoundation
 /// By playing TTS through the same AVAudioEngine that captures the mic,
 /// macOS voice processing can use the playback as a reference signal
 /// and cancel it from the mic input (acoustic echo cancellation).
-///
-/// Replaces the previous ffplay-based approach which couldn't provide
-/// the AEC reference since it was a separate process.
 final class AudioPlayer {
 
     private var playerNode: AVAudioPlayerNode?
     private weak var engine: AVAudioEngine?
+    /// The format the player node is connected with — all scheduled buffers must match this.
+    private var playerFormat: AVAudioFormat?
     private let lock = NSLock()
     private var playbackContinuation: CheckedContinuation<Void, Never>?
 
@@ -23,20 +22,34 @@ final class AudioPlayer {
     }
 
     /// Attach this player to an AVAudioEngine.
-    /// Must be called BEFORE engine.start() so voice processing
-    /// sees the player node in the graph.
+    /// Must be called BEFORE engine.start().
     func attach(to engine: AVAudioEngine) {
         let node = AVAudioPlayerNode()
         engine.attach(node)
 
-        // Connect to mainMixerNode using the input node's output format.
-        // Per Apple docs: when voice processing is enabled, all nodes in the
-        // chain must use the same format as the input node's output.
-        let connectFormat = engine.inputNode.outputFormat(forBus: 0)
+        // Use mainMixerNode's output format for connection.
+        // This ensures compatibility with the engine's output chain.
+        let mixerFormat = engine.mainMixerNode.outputFormat(forBus: 0)
+
+        // If the mixer format looks bad (0Hz, 0ch), fall back to a standard format
+        let connectFormat: AVAudioFormat
+        if mixerFormat.sampleRate > 0 && mixerFormat.channelCount > 0 && mixerFormat.channelCount <= 2 {
+            connectFormat = mixerFormat
+        } else {
+            // Safe default: 48kHz stereo float32
+            connectFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 48000,
+                channels: 2,
+                interleaved: false
+            )!
+        }
+
         engine.connect(node, to: engine.mainMixerNode, format: connectFormat)
 
         self.playerNode = node
         self.engine = engine
+        self.playerFormat = connectFormat
 
         print("Magpi: AudioPlayer attached (format: \(Int(connectFormat.sampleRate))Hz, \(connectFormat.channelCount)ch)")
     }
@@ -44,15 +57,15 @@ final class AudioPlayer {
     /// Play raw PCM audio data (s16le, 24kHz, mono).
     /// Blocks until playback completes or is interrupted.
     func play(audioData: Data) async throws {
-        guard let playerNode = playerNode, let engine = engine else {
+        guard let playerNode = playerNode, let _ = engine, let playerFormat = playerFormat else {
             throw PlayerError.notAttached
         }
 
         guard !audioData.isEmpty else { return }
 
-        // Convert s16le 24kHz mono → float32 PCM buffer at output sample rate
+        // Source: s16le 24kHz mono
         let sourceSampleRate: Double = 24000
-        let sourceFrameCount = audioData.count / 2  // 2 bytes per s16le sample
+        let sourceFrameCount = audioData.count / 2
 
         guard let sourceFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -63,7 +76,7 @@ final class AudioPlayer {
             throw PlayerError.formatError("Could not create source format")
         }
 
-        // Create source buffer with float32 samples converted from s16le
+        // Convert s16le → float32 source buffer
         guard let sourceBuffer = AVAudioPCMBuffer(
             pcmFormat: sourceFormat,
             frameCapacity: AVAudioFrameCount(sourceFrameCount)
@@ -72,7 +85,6 @@ final class AudioPlayer {
         }
         sourceBuffer.frameLength = AVAudioFrameCount(sourceFrameCount)
 
-        // Convert s16le → float32
         guard let floatData = sourceBuffer.floatChannelData?[0] else {
             throw PlayerError.formatError("Could not access float buffer")
         }
@@ -84,24 +96,26 @@ final class AudioPlayer {
             }
         }
 
-        // Convert to output format if sample rates differ
-        let outputFormat = engine.outputNode.inputFormat(forBus: 0)
+        // Convert to the player node's connected format (must match exactly)
         let playBuffer: AVAudioPCMBuffer
 
-        if abs(sourceSampleRate - outputFormat.sampleRate) < 1.0 && outputFormat.channelCount == 1 {
-            // Same rate, use directly
+        if abs(sourceSampleRate - playerFormat.sampleRate) < 1.0
+            && playerFormat.channelCount == 1 {
+            // Formats match, use source directly
             playBuffer = sourceBuffer
         } else {
-            // Need to convert
-            guard let converter = AVAudioConverter(from: sourceFormat, to: outputFormat) else {
-                throw PlayerError.formatError("Could not create converter from \(Int(sourceSampleRate))Hz to \(Int(outputFormat.sampleRate))Hz")
+            // Convert sample rate and/or channel count
+            guard let converter = AVAudioConverter(from: sourceFormat, to: playerFormat) else {
+                throw PlayerError.formatError(
+                    "Cannot convert \(Int(sourceSampleRate))Hz/1ch → \(Int(playerFormat.sampleRate))Hz/\(playerFormat.channelCount)ch"
+                )
             }
 
             let outputFrameCount = AVAudioFrameCount(
-                Double(sourceFrameCount) * outputFormat.sampleRate / sourceSampleRate
+                Double(sourceFrameCount) * playerFormat.sampleRate / sourceSampleRate
             )
             guard let convertedBuffer = AVAudioPCMBuffer(
-                pcmFormat: outputFormat,
+                pcmFormat: playerFormat,
                 frameCapacity: outputFrameCount
             ) else {
                 throw PlayerError.formatError("Could not create output buffer")
@@ -121,9 +135,6 @@ final class AudioPlayer {
         }
 
         // Schedule and play
-        lock.lock()
-        lock.unlock()
-
         if !playerNode.isPlaying {
             playerNode.play()
         }
@@ -151,8 +162,6 @@ final class AudioPlayer {
         lock.unlock()
 
         playerNode?.stop()
-
-        // Resume any waiting continuation
         cont?.resume()
     }
 
@@ -164,6 +173,7 @@ final class AudioPlayer {
             engine.detach(node)
         }
         playerNode = nil
+        playerFormat = nil
         self.engine = nil
     }
 
