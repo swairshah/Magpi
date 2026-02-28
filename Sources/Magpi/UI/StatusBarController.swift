@@ -14,9 +14,11 @@ final class StatusBarController {
     var onQuit: (() -> Void)?
     
     private weak var conversationLoop: ConversationLoop?
+    private var transcriptPanel: TranscriptPanelController?
     
     init(conversationLoop: ConversationLoop) {
         self.conversationLoop = conversationLoop
+        self.transcriptPanel = TranscriptPanelController(store: conversationLoop.transcript)
         setupMenuBar()
         observeState()
     }
@@ -49,6 +51,17 @@ final class StatusBarController {
         toggleItem.target = self
         menu.addItem(toggleItem)
         
+        // Transcript panel
+        let transcriptVisible = transcriptPanel?.isVisible ?? false
+        let transcriptItem = NSMenuItem(
+            title: transcriptVisible ? "Hide Transcript" : "Show Transcript",
+            action: #selector(toggleTranscript),
+            keyEquivalent: "t"
+        )
+        transcriptItem.keyEquivalentModifierMask = [.command]
+        transcriptItem.target = self
+        menu.addItem(transcriptItem)
+
         // Stop speaking
         let stopItem = NSMenuItem(title: "Stop Speech", action: #selector(stopSpeech), keyEquivalent: ".")
         stopItem.keyEquivalentModifierMask = [.command]
@@ -130,6 +143,10 @@ final class StatusBarController {
     
     // MARK: - Actions
     
+    @objc private func toggleTranscript() {
+        transcriptPanel?.togglePanel()
+    }
+
     @objc private func toggleEnabled() {
         guard let loop = conversationLoop else { return }
         loop.isEnabled.toggle()

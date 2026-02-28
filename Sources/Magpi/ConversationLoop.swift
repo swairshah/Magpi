@@ -61,6 +61,9 @@ final class ConversationLoop: ObservableObject {
     private let piBridge = PiBridge()
     private let piRPC = PiRPCClient()
 
+    // Transcript for UI
+    let transcript = TranscriptStore()
+
     // Turn check state
     private var turnCheckRetries = 0
 
@@ -148,29 +151,50 @@ final class ConversationLoop: ObservableObject {
     // MARK: - Pi RPC Agent
 
     private func startConversationAgent() throws {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
         let systemPrompt = """
         You are Magpi, a voice conversation assistant. The user is speaking to you through \
         a microphone — their speech is transcribed and sent to you as text.
 
         You manage multiple Pi coding agents running in the background. You can:
         1. Answer questions directly (about code, projects, general topics)
-        2. Check what other Pi agents are doing (query pi-statusd via bash)
+        2. Check what other Pi agents are doing
         3. Dispatch commands to specific agents
         4. Summarize agent activity
 
-        To discover running Pi agents, run:
-          echo 'status' | nc -U ~/.pi/agent/statusd.sock
+        ## Discovering Running Pi Agents
 
-        To send a command to a specific agent by PID:
-          echo 'send <pid> <text>' | nc -U ~/.pi/agent/statusd.sock
+        Use pi-statusd via socat to discover agents:
+        ```
+        echo 'status' | socat - UNIX-CONNECT:\(home)/.pi/agent/statusd.sock
+        ```
+        This returns JSON with an `agents` array. Each agent has:
+        - `pid`: process ID
+        - `cwd`: working directory (tells you which project)
+        - `activity`: what it's doing ("running", "waiting_input", etc.)
+        - `model_id`: which LLM model it's using
+        - `session_name`: optional name
+        - `context_percent`: how full its context window is
 
-        Keep responses concise and conversational — the user is listening, not reading. \
-        Use <voice> tags for all spoken content.
+        ## Sending Commands to Pi Agents
+
+        Write a JSON file to the agent's inbox directory:
+        ```
+        echo '{"text":"your message here","source":"magpi","timestamp":'$(date +%s000)'}' > \(home)/.pi/agent/pitalk-inbox/<PID>/$(date +%s%3N).json
+        ```
+        The pi-talk extension watches this directory and injects the message into the Pi session.
+        The PID must match a running agent from the status command.
+
+        ## Important Guidelines
+        - Keep responses concise and conversational — the user is LISTENING, not reading
+        - Use <voice> tags for all spoken content
+        - When the user asks about "the agent" or "Pi", check which agents are running first
+        - When dispatching, confirm what you sent and to which agent
         """
 
         try piRPC.start(
             systemPrompt: systemPrompt,
-            workingDirectory: FileManager.default.homeDirectoryForCurrentUser.path
+            workingDirectory: home
         )
         isAgentRunning = true
     }
@@ -211,68 +235,58 @@ final class ConversationLoop: ObservableObject {
     private func handleRPCEvent(_ event: PiRPCClient.Event) {
         switch event {
         case .agentStart:
-            if verboseLogging {
-                print("Magpi: [rpc] Agent started processing")
-            }
+            transcript.beginAssistantMessage()
+            transcript.addLog("Agent started processing")
 
         case .agentEnd:
-            if verboseLogging {
-                print("Magpi: [rpc] Agent finished")
-            }
+            transcript.endAssistantMessage()
+            transcript.addLog("Agent finished")
             // If we're still waiting and nothing was queued to speak,
             // go back to idle (the response might have had no voice tags)
             if state == .waiting {
-                // Give a brief moment for any final speak commands to arrive via broker
                 Task {
                     try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
                     if state == .waiting {
-                        print("Magpi: Agent done, no speech queued → idle")
+                        transcript.addLog("No speech queued → idle")
                         state = .idle
                     }
                 }
             }
 
         case .textDelta(let text):
-            if verboseLogging {
-                // Don't log every delta — too noisy. Just track that streaming is happening.
-                let preview = text.prefix(40).replacingOccurrences(of: "\n", with: "\\n")
-                print("Magpi: [rpc] Δ \(preview)")
-            }
+            transcript.appendAssistantDelta(text)
 
         case .textEnd(let fullText):
-            if verboseLogging {
-                print("Magpi: [rpc] Text block complete (\(fullText.count) chars)")
-            }
+            transcript.addLog("Text block complete (\(fullText.count) chars)")
 
         case .toolStart(let name, _):
-            print("Magpi: [rpc] Tool: \(name)")
+            transcript.addLog("Tool: \(name)")
 
         case .toolEnd(let name, _):
-            if verboseLogging {
-                print("Magpi: [rpc] Tool done: \(name)")
-            }
+            transcript.addLog("Tool done: \(name)")
 
         case .response(let command, let success, let error):
             if !success {
-                print("Magpi: [rpc] Command '\(command)' failed: \(error ?? "unknown")")
+                let msg = "Command '\(command)' failed: \(error ?? "unknown")"
+                transcript.addLog("ERROR: \(msg)")
+                print("Magpi: [rpc] \(msg)")
             }
 
         case .stateResponse(let streaming, let sessionId):
-            if verboseLogging {
-                print("Magpi: [rpc] State: streaming=\(streaming) session=\(sessionId ?? "nil")")
-            }
+            transcript.addLog("State: streaming=\(streaming) session=\(sessionId ?? "nil")")
 
         case .error(let msg):
+            transcript.addLog("ERROR: \(msg)")
             print("Magpi: [rpc] Error: \(msg)")
 
         case .processExited(let code):
+            transcript.addLog("Pi RPC process exited (code \(code))")
             print("Magpi: Pi RPC process exited (\(code))")
             isAgentRunning = false
-            // Try to restart after a delay
             if state != .error("") {
                 Task {
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
-                    print("Magpi: Restarting Pi RPC agent...")
+                    transcript.addLog("Restarting Pi RPC agent...")
                     try? startConversationAgent()
                 }
             }
@@ -439,19 +453,23 @@ final class ConversationLoop: ObservableObject {
                 return
             }
 
+            // Add to transcript
+            transcript.addUserMessage(text)
+
             // Send to Pi conversation agent via RPC
             print("Magpi: Sending to Pi: \"\(text.prefix(80))\"")
+            transcript.addLog("Sending: \"\(text.prefix(120))\"")
 
             if piRPC.isRunning {
                 if piRPC.isStreaming {
-                    // Agent is still responding — steer it with new input
                     piRPC.steer(text)
+                    transcript.addLog("Steered agent with new input")
                 } else {
                     piRPC.sendPrompt(text)
                 }
             } else {
-                // Fallback: write to inbox if RPC is not available
                 print("Magpi: RPC not running, falling back to inbox")
+                transcript.addLog("WARNING: RPC not running, using inbox fallback")
                 piBridge.sendToPi(text: text)
             }
 
