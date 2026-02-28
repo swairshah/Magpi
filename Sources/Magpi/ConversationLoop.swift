@@ -319,6 +319,13 @@ final class ConversationLoop: ObservableObject {
 
         frameCount += 1
 
+        // Skip VAD entirely while speaking — without AEC, the TTS audio
+        // bleeds into the mic and triggers false speech detection.
+        // Barge-in is disabled until proper echo cancellation is available.
+        if state == .speaking {
+            return
+        }
+
         // Always accumulate audio when listening
         if state == .listening || state == .turnCheck {
             audioBuffer.append(samples)
@@ -362,27 +369,9 @@ final class ConversationLoop: ObservableObject {
             }
 
         case .speaking:
-            // Barge-in detection
-            if event == .speechContinue {
-                bargeInChunkCount += 1
-                if bargeInChunkCount >= Constants.bargeInMinChunks {
-                    print("Magpi: Barge-in detected!")
-                    audioPlayer.stop()
-                    clearSpeechQueue()
-                    // Abort the Pi agent if it's still streaming
-                    if piRPC.isStreaming {
-                        piRPC.abort()
-                    }
-                    sileroVAD?.resetIterator()
-                    bargeInChunkCount = 0
-                    audioBuffer.reset()
-                    audioBuffer.append(samples)
-                    state = .listening
-                    print("Magpi: → LISTENING (barge-in)")
-                }
-            } else {
-                bargeInChunkCount = 0
-            }
+            // Unreachable — we return early above when speaking.
+            // Barge-in will be re-enabled once AEC is working.
+            break
 
         case .waiting:
             // User might speak again while waiting for Pi response
@@ -391,7 +380,6 @@ final class ConversationLoop: ObservableObject {
                 if bargeInChunkCount >= Constants.bargeInMinChunks {
                     print("Magpi: User speaking while waiting — interrupting")
                     clearSpeechQueue()
-                    // Steer the agent with the new input (will be transcribed)
                     if piRPC.isStreaming {
                         piRPC.abort()
                     }
@@ -538,6 +526,9 @@ final class ConversationLoop: ObservableObject {
         guard !speechQueue.isEmpty else {
             speechQueueLock.unlock()
             if state == .speaking {
+                // Reset VAD after speaking — its state may be contaminated
+                // from TTS bleed that occurred before we started skipping frames
+                sileroVAD?.reset()
                 state = .idle
                 print("Magpi: → IDLE (speech queue empty)")
             }
