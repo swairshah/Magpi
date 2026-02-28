@@ -62,24 +62,25 @@ final class StatusBarController {
         transcriptItem.target = self
         menu.addItem(transcriptItem)
 
-        // Push-to-talk (Cmd+Shift+M)
-        let pttItem = NSMenuItem(
-            title: "Push to Talk",
-            action: #selector(pushToTalk),
-            keyEquivalent: "m"
+        // Record toggle (Alt+S)
+        let isRecording = conversationLoop?.isRecordToggleActive ?? false
+        let recordItem = NSMenuItem(
+            title: isRecording ? "Stop Recording (⌥S)" : "Record (⌥S)",
+            action: #selector(toggleRecording),
+            keyEquivalent: "s"
         )
-        pttItem.keyEquivalentModifierMask = [.command, .shift]
-        pttItem.target = self
-        menu.addItem(pttItem)
+        recordItem.keyEquivalentModifierMask = [.option]
+        recordItem.target = self
+        menu.addItem(recordItem)
 
-        // Barge-in toggle
+        // Barge-in toggle (Alt+B)
         let bargeIn = conversationLoop?.bargeInEnabled ?? true
         let bargeInItem = NSMenuItem(
             title: "Barge-in (Headphones)",
             action: #selector(toggleBargeIn),
             keyEquivalent: "b"
         )
-        bargeInItem.keyEquivalentModifierMask = [.command]
+        bargeInItem.keyEquivalentModifierMask = [.option]
         bargeInItem.state = bargeIn ? .on : .off
         bargeInItem.target = self
         menu.addItem(bargeInItem)
@@ -169,8 +170,9 @@ final class StatusBarController {
         transcriptPanel?.togglePanel()
     }
 
-    @objc private func pushToTalk() {
-        conversationLoop?.pushToTalk()
+    @objc private func toggleRecording() {
+        conversationLoop?.toggleRecording()
+        rebuildMenu()
     }
 
     @objc private func toggleBargeIn() {

@@ -209,9 +209,18 @@ final class ConversationLoop: ObservableObject {
         - When dispatching, confirm what you sent and to which agent
         """
 
+        // Persist sessions in a dedicated Magpi directory
+        let sessionDir = Constants.appSupportDir.appendingPathComponent("sessions").path
+        try? FileManager.default.createDirectory(
+            atPath: sessionDir,
+            withIntermediateDirectories: true
+        )
+
         try piRPC.start(
             systemPrompt: systemPrompt,
-            workingDirectory: home
+            workingDirectory: home,
+            sessionDir: sessionDir,
+            continueSession: true  // Resume last conversation
         )
         isAgentRunning = true
     }
@@ -312,25 +321,44 @@ final class ConversationLoop: ObservableObject {
 
     // MARK: - Audio Processing
 
-    // MARK: - Push-to-Talk
+    /// Whether recording toggle is active (Alt+S).
+    @Published private(set) var isRecordToggleActive = false
 
-    /// Interrupt TTS and start listening immediately.
-    /// Use when barge-in is disabled (no headphones).
-    func pushToTalk() {
-        if state == .speaking {
-            audioPlayer.stop()
-            clearSpeechQueue()
-            if piRPC.isStreaming {
-                piRPC.abort()
+    // MARK: - Record Toggle (Alt+S)
+
+    /// Toggle recording on/off. Press once to start listening,
+    /// press again to stop and transcribe.
+    func toggleRecording() {
+        if isRecordToggleActive {
+            // Stop recording → transcribe
+            isRecordToggleActive = false
+            print("Magpi: Record toggle OFF → transcribing")
+            transcript.addLog("Record toggle off → transcribing")
+
+            if state == .listening || state == .turnCheck {
+                // Force transcription immediately
+                Task { await transcribe() }
             }
-        }
+        } else {
+            // Start recording
+            isRecordToggleActive = true
 
-        sileroVAD?.reset()
-        audioBuffer.reset()
-        bargeInChunkCount = 0
-        state = .listening
-        print("Magpi: → LISTENING (push-to-talk)")
-        transcript.addLog("Push-to-talk activated")
+            // Stop any current TTS
+            if state == .speaking {
+                audioPlayer.stop()
+                clearSpeechQueue()
+                if piRPC.isStreaming {
+                    piRPC.abort()
+                }
+            }
+
+            sileroVAD?.reset()
+            audioBuffer.reset()
+            bargeInChunkCount = 0
+            state = .listening
+            print("Magpi: Record toggle ON → LISTENING")
+            transcript.addLog("Record toggle on → listening")
+        }
     }
 
     // MARK: - Audio Processing
@@ -381,7 +409,9 @@ final class ConversationLoop: ObservableObject {
             }
 
         case .listening:
-            if event == .turnSilence {
+            if event == .turnSilence && !isRecordToggleActive {
+                // Only auto-detect turn when not in record toggle mode.
+                // In record toggle mode, user presses Alt+S again to stop.
                 state = .turnCheck
                 turnCheckRetries = 0
                 print("Magpi: → TURN_CHECK")
@@ -477,6 +507,7 @@ final class ConversationLoop: ObservableObject {
             return
         }
 
+        isRecordToggleActive = false  // Always reset toggle when transcribing
         state = .transcribing
         print("Magpi: → TRANSCRIBING (\(String(format: "%.1f", audioBuffer.duration))s of audio)")
 

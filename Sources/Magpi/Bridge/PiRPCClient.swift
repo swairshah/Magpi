@@ -60,11 +60,15 @@ final class PiRPCClient {
     ///   - model: Model ID (e.g. "claude-sonnet-4-20250514")
     ///   - systemPrompt: Optional additional system prompt text
     ///   - workingDirectory: Working directory for the Pi session
+    ///   - sessionDir: Directory for session persistence (nil = default Pi sessions dir)
+    ///   - continueSession: If true, continue the last session in sessionDir
     func start(
         provider: String? = nil,
         model: String? = nil,
         systemPrompt: String? = nil,
-        workingDirectory: String? = nil
+        workingDirectory: String? = nil,
+        sessionDir: String? = nil,
+        continueSession: Bool = false
     ) throws {
         guard !isRunning else { return }
 
@@ -90,6 +94,12 @@ final class PiRPCClient {
         }
         if let systemPrompt = systemPrompt {
             args += ["--append-system-prompt", systemPrompt]
+        }
+        if let sessionDir = sessionDir {
+            args += ["--session-dir", sessionDir]
+        }
+        if continueSession {
+            args += ["--continue"]
         }
 
         proc.arguments = args

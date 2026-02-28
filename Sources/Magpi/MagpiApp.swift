@@ -26,8 +26,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Run as menubar-only app (no dock icon by default)
         NSApp.setActivationPolicy(.accessory)
 
-        // Register global hotkey: Ctrl+Shift+Space for push-to-talk
-        registerGlobalHotkey()
+        // Register global hotkeys
+        registerGlobalHotkeys()
         
         print("Magpi: Starting up...")
         
@@ -81,23 +81,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
     
-    // MARK: - Global Hotkey
+    // MARK: - Global Hotkeys
 
-    private func registerGlobalHotkey() {
-        // Ctrl+Shift+Space → push-to-talk
-        // Works globally even when app is not focused
+    private func registerGlobalHotkeys() {
+        // Global hotkeys work even when app is not focused
         globalHotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            // Ctrl+Shift+Space (keyCode 49 = space)
-            if event.keyCode == 49
-                && event.modifierFlags.contains(.control)
-                && event.modifierFlags.contains(.shift)
-            {
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+            // Alt+S (keyCode 1 = 's') → Record toggle
+            if event.keyCode == 1 && flags == .option {
                 DispatchQueue.main.async {
-                    self?.conversationLoop?.pushToTalk()
+                    self?.conversationLoop?.toggleRecording()
                 }
+                return
+            }
+
+            // Alt+B (keyCode 11 = 'b') → Barge-in toggle
+            if event.keyCode == 11 && flags == .option {
+                DispatchQueue.main.async {
+                    guard let loop = self?.conversationLoop else { return }
+                    loop.bargeInEnabled.toggle()
+                    print("Magpi: Barge-in \(loop.bargeInEnabled ? "enabled" : "disabled")")
+                }
+                return
             }
         }
-        print("Magpi: Global hotkey registered: Ctrl+Shift+Space = push-to-talk")
+        print("Magpi: Global hotkeys: ⌥S = record toggle, ⌥B = barge-in toggle")
     }
 
     // MARK: - Private
