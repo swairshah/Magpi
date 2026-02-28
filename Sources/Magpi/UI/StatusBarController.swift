@@ -64,6 +64,16 @@ final class StatusBarController {
         
         menu.addItem(NSMenuItem.separator())
         
+        // Agent status
+        let agentRunning = conversationLoop?.isAgentRunning ?? false
+        let agentStatus = NSMenuItem(
+            title: "Pi Agent: \(agentRunning ? "Running ✓" : "Not running ✗")",
+            action: nil,
+            keyEquivalent: ""
+        )
+        agentStatus.isEnabled = false
+        menu.addItem(agentStatus)
+
         // Model status
         let models = ModelManager.shared
         let modelStatus = NSMenuItem(
