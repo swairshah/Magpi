@@ -62,6 +62,28 @@ final class StatusBarController {
         transcriptItem.target = self
         menu.addItem(transcriptItem)
 
+        // Push-to-talk (Cmd+Shift+M)
+        let pttItem = NSMenuItem(
+            title: "Push to Talk",
+            action: #selector(pushToTalk),
+            keyEquivalent: "m"
+        )
+        pttItem.keyEquivalentModifierMask = [.command, .shift]
+        pttItem.target = self
+        menu.addItem(pttItem)
+
+        // Barge-in toggle
+        let bargeIn = conversationLoop?.bargeInEnabled ?? true
+        let bargeInItem = NSMenuItem(
+            title: "Barge-in (Headphones)",
+            action: #selector(toggleBargeIn),
+            keyEquivalent: "b"
+        )
+        bargeInItem.keyEquivalentModifierMask = [.command]
+        bargeInItem.state = bargeIn ? .on : .off
+        bargeInItem.target = self
+        menu.addItem(bargeInItem)
+
         // Stop speaking
         let stopItem = NSMenuItem(title: "Stop Speech", action: #selector(stopSpeech), keyEquivalent: ".")
         stopItem.keyEquivalentModifierMask = [.command]
@@ -145,6 +167,17 @@ final class StatusBarController {
     
     @objc private func toggleTranscript() {
         transcriptPanel?.togglePanel()
+    }
+
+    @objc private func pushToTalk() {
+        conversationLoop?.pushToTalk()
+    }
+
+    @objc private func toggleBargeIn() {
+        guard let loop = conversationLoop else { return }
+        loop.bargeInEnabled.toggle()
+        print("Magpi: Barge-in \(loop.bargeInEnabled ? "enabled" : "disabled")")
+        rebuildMenu()
     }
 
     @objc private func toggleEnabled() {

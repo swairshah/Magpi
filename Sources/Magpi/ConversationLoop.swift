@@ -50,6 +50,10 @@ final class ConversationLoop: ObservableObject {
     @Published private(set) var isAgentRunning = false
     @Published var isEnabled = true
 
+    /// When true, VAD detects speech during TTS playback and interrupts it.
+    /// Turn off when not wearing headphones (TTS bleeds into mic).
+    @Published var bargeInEnabled = true
+
     // Components
     private let audioCapture = AudioCaptureSession()
     private let audioBuffer = AudioBuffer()
@@ -128,14 +132,8 @@ final class ConversationLoop: ObservableObject {
                 return
             }
 
-            // Attach audio player to engine BEFORE it starts (required for AEC)
-            audioCapture.onEngineReady = { [weak self] engine in
-                self?.audioPlayer.attach(to: engine)
-            }
-
-            // Start audio capture. Set MAGPI_NO_AEC=1 to disable voice processing.
-            let enableAEC = ProcessInfo.processInfo.environment["MAGPI_NO_AEC"] != "1"
-            try audioCapture.start(enableVoiceProcessing: enableAEC)
+            // Start audio capture
+            try audioCapture.start()
 
             state = .idle
 
@@ -148,7 +146,7 @@ final class ConversationLoop: ObservableObject {
 
     /// Stop the conversation loop.
     func stop() {
-        audioPlayer.detach()
+        audioPlayer.stop()
         audioCapture.stop()
         ttsEngine.stopServer()
         piBridge.stopBroker()
@@ -314,15 +312,37 @@ final class ConversationLoop: ObservableObject {
 
     // MARK: - Audio Processing
 
+    // MARK: - Push-to-Talk
+
+    /// Interrupt TTS and start listening immediately.
+    /// Use when barge-in is disabled (no headphones).
+    func pushToTalk() {
+        if state == .speaking {
+            audioPlayer.stop()
+            clearSpeechQueue()
+            if piRPC.isStreaming {
+                piRPC.abort()
+            }
+        }
+
+        sileroVAD?.reset()
+        audioBuffer.reset()
+        bargeInChunkCount = 0
+        state = .listening
+        print("Magpi: → LISTENING (push-to-talk)")
+        transcript.addLog("Push-to-talk activated")
+    }
+
+    // MARK: - Audio Processing
+
     private func processAudioFrame(_ samples: [Float]) {
         guard isEnabled, let vad = sileroVAD else { return }
 
         frameCount += 1
 
-        // Skip VAD entirely while speaking — without AEC, the TTS audio
-        // bleeds into the mic and triggers false speech detection.
-        // Barge-in is disabled until proper echo cancellation is available.
-        if state == .speaking {
+        // When barge-in is disabled, skip VAD during TTS playback
+        // to prevent the speaker audio from triggering false detection.
+        if state == .speaking && !bargeInEnabled {
             return
         }
 
@@ -369,9 +389,26 @@ final class ConversationLoop: ObservableObject {
             }
 
         case .speaking:
-            // Unreachable — we return early above when speaking.
-            // Barge-in will be re-enabled once AEC is working.
-            break
+            // Barge-in (only when enabled — requires headphones)
+            if bargeInEnabled, event == .speechContinue {
+                bargeInChunkCount += 1
+                if bargeInChunkCount >= Constants.bargeInMinChunks {
+                    print("Magpi: Barge-in detected!")
+                    audioPlayer.stop()
+                    clearSpeechQueue()
+                    if piRPC.isStreaming {
+                        piRPC.abort()
+                    }
+                    sileroVAD?.resetIterator()
+                    bargeInChunkCount = 0
+                    audioBuffer.reset()
+                    audioBuffer.append(samples)
+                    state = .listening
+                    print("Magpi: → LISTENING (barge-in)")
+                }
+            } else {
+                bargeInChunkCount = 0
+            }
 
         case .waiting:
             // User might speak again while waiting for Pi response

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Carbon.HIToolbox
 
 @main
 struct MagpiApp: App {
@@ -19,10 +20,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusBar: StatusBarController!
     private var conversationLoop: ConversationLoop!
     private var settingsWindow: NSWindow?
+    private var globalHotkeyMonitor: Any?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Run as menubar-only app (no dock icon by default)
         NSApp.setActivationPolicy(.accessory)
+
+        // Register global hotkey: Ctrl+Shift+Space for push-to-talk
+        registerGlobalHotkey()
         
         print("Magpi: Starting up...")
         
@@ -66,6 +71,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     func applicationWillTerminate(_ notification: Notification) {
         conversationLoop?.stop()
+        if let monitor = globalHotkeyMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
     }
     
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -73,6 +81,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
     
+    // MARK: - Global Hotkey
+
+    private func registerGlobalHotkey() {
+        // Ctrl+Shift+Space → push-to-talk
+        // Works globally even when app is not focused
+        globalHotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            // Ctrl+Shift+Space (keyCode 49 = space)
+            if event.keyCode == 49
+                && event.modifierFlags.contains(.control)
+                && event.modifierFlags.contains(.shift)
+            {
+                DispatchQueue.main.async {
+                    self?.conversationLoop?.pushToTalk()
+                }
+            }
+        }
+        print("Magpi: Global hotkey registered: Ctrl+Shift+Space = push-to-talk")
+    }
+
     // MARK: - Private
     
     @MainActor
