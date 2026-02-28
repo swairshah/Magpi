@@ -201,6 +201,33 @@ Session discovery and dispatch is already solved by the daemon:
 
 ## 4. Implementation Priorities
 
+### Phase 0: Echo cancellation (TTS voice triggering VAD)
+
+**Problem:** The manager's TTS output plays through the speaker and gets picked up by the microphone, triggering the VAD and creating a feedback loop.
+
+**Solution: AVAudioEngine Voice Processing (native macOS AEC)**
+
+macOS has built-in acoustic echo cancellation via `AVAudioEngine`'s voice processing mode. If we play TTS audio through the *same* engine that captures the mic, macOS automatically uses the playback as a reference signal and subtracts it from the mic input.
+
+```swift
+let engine = AVAudioEngine()
+try engine.inputNode.setVoiceProcessingEnabled(true)
+try engine.outputNode.setVoiceProcessingEnabled(true)
+```
+
+**What needs to change:**
+- [ ] Enable voice processing on `AudioCaptureSession`'s input and output nodes
+- [ ] Replace `AudioPlayer` (ffplay subprocess) with `AVAudioPlayerNode` on the same engine
+- [ ] Route TTS audio bytes through the player node instead of writing to ffplay's stdin
+- [ ] Format requirements: 32-bit Float PCM at 16kHz, 24kHz, or 48kHz — we already use 16kHz
+
+**Key constraint:** The reference signal *must* be audio played through the same `AVAudioEngine` instance. External playback (ffplay) can't be cancelled. This is why we need to replace ffplay.
+
+**Alternatives if native AEC isn't sufficient:**
+- WebRTC AEC3: manual reference feeding via `ProcessReverseStream()`, 10ms chunks
+- Speex: `speex_echo_playback()` + `speex_echo_capture()`, simpler but older
+- Simple approach: just mute the mic during TTS playback (loses barge-in capability)
+
 ### Phase 1: RPC conversation agent (next)
 - [ ] Build `PiRPCClient` — spawn Pi in RPC mode, send/receive NDJSON
 - [ ] Replace `PiBridge.sendToPi()` with RPC `prompt` command
