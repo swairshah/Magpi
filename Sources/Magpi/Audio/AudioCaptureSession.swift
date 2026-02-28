@@ -65,6 +65,17 @@ final class AudioCaptureSession {
                 try engine.outputNode.setVoiceProcessingEnabled(true)
                 voiceProcessingEnabled = true
                 print("Magpi: Voice processing (AEC) enabled ✓")
+
+                // Validate the format — VP can produce bogus formats with
+                // mismatched audio devices (e.g. 96kHz/9ch)
+                let vpCheck = engine.inputNode.outputFormat(forBus: 0)
+                if vpCheck.channelCount > 2 || vpCheck.sampleRate > 48100 || vpCheck.sampleRate < 8000 {
+                    print("Magpi: Voice processing produced bad format: \(Int(vpCheck.sampleRate))Hz/\(vpCheck.channelCount)ch")
+                    print("Magpi: Disabling voice processing — check your audio devices")
+                    try engine.inputNode.setVoiceProcessingEnabled(false)
+                    try engine.outputNode.setVoiceProcessingEnabled(false)
+                    voiceProcessingEnabled = false
+                }
             } catch {
                 print("Magpi: Warning — voice processing failed: \(error)")
                 print("Magpi: Falling back to non-AEC mode")
@@ -73,7 +84,6 @@ final class AudioCaptureSession {
         }
 
         // Step 2: Query format AFTER voice processing is configured.
-        // Voice processing changes the format — we must query after enabling.
         let inputNode = engine.inputNode
         let vpFormat = inputNode.outputFormat(forBus: 0)
         print("Magpi: Input format (post-VP): \(Int(vpFormat.sampleRate))Hz, \(vpFormat.channelCount)ch, voiceProcessing=\(inputNode.isVoiceProcessingEnabled)")
