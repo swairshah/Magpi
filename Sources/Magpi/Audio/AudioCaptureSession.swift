@@ -7,10 +7,6 @@ import Accelerate
 /// nodes. When TTS audio is played through an AVAudioPlayerNode attached to
 /// the same engine, macOS automatically uses the playback as a reference
 /// signal for acoustic echo cancellation (AEC).
-///
-/// Unlike Hearsay's AudioRecorder (start/stop per recording), this runs
-/// continuously and delivers audio frames via a callback. The conversation
-/// loop feeds these frames to the VAD.
 final class AudioCaptureSession {
 
     enum CaptureError: Error, LocalizedError {
@@ -26,7 +22,6 @@ final class AudioCaptureSession {
     }
 
     /// Called with each chunk of float32 audio samples at 16kHz mono.
-    /// Called on the audio processing queue (not main thread).
     var onAudioFrame: (([Float]) -> Void)?
 
     /// Called with RMS audio level (0-1) for UI visualization.
@@ -40,6 +35,9 @@ final class AudioCaptureSession {
     private(set) var audioEngine: AVAudioEngine?
     private var isRunning = false
 
+    /// Whether voice processing (AEC) is enabled.
+    private(set) var voiceProcessingEnabled = false
+
     init() {}
 
     deinit {
@@ -48,25 +46,33 @@ final class AudioCaptureSession {
 
     // MARK: - Lifecycle
 
-    func start() throws {
+    /// Start audio capture with echo cancellation.
+    /// - Parameter enableVoiceProcessing: If true, enables AEC. Set to false to bypass.
+    func start(enableVoiceProcessing: Bool = true) throws {
         guard !isRunning else { return }
 
         let engine = AVAudioEngine()
 
-        // Enable voice processing for echo cancellation.
-        // This must be done BEFORE starting the engine.
-        // Voice processing uses the output audio as AEC reference.
-        do {
-            try engine.inputNode.setVoiceProcessingEnabled(true)
-            try engine.outputNode.setVoiceProcessingEnabled(true)
-            print("Magpi: Voice processing (AEC) enabled ✓")
-        } catch {
-            print("Magpi: Warning — voice processing failed: \(error)")
-            print("Magpi: Echo cancellation will not be available")
+        // Step 1: Enable voice processing BEFORE anything else.
+        // This reconfigures the internal Audio Unit graph.
+        if enableVoiceProcessing {
+            do {
+                try engine.inputNode.setVoiceProcessingEnabled(true)
+                try engine.outputNode.setVoiceProcessingEnabled(true)
+                voiceProcessingEnabled = true
+                print("Magpi: Voice processing (AEC) enabled ✓")
+            } catch {
+                print("Magpi: Warning — voice processing failed: \(error)")
+                print("Magpi: Falling back to non-AEC mode")
+                voiceProcessingEnabled = false
+            }
         }
 
+        // Step 2: Query format AFTER voice processing is configured.
+        // Voice processing changes the format — we must query after enabling.
         let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
+        let vpFormat = inputNode.outputFormat(forBus: 0)
+        print("Magpi: Input format (post-VP): \(Int(vpFormat.sampleRate))Hz, \(vpFormat.channelCount)ch, voiceProcessing=\(inputNode.isVoiceProcessingEnabled)")
 
         // Target format: 16kHz mono float32
         guard let targetFormat = AVAudioFormat(
@@ -78,24 +84,39 @@ final class AudioCaptureSession {
             throw CaptureError.engineSetupFailed("Could not create target audio format")
         }
 
-        let converter = AVAudioConverter(from: inputFormat, to: targetFormat)
-
+        // Step 3: Install tap using the format reported by the node.
+        // Pass nil to let the system pick the right format.
         let bufferSize: AVAudioFrameCount = 4096
+        var tapConverterCreated = false
+        var tapConverter: AVAudioConverter?
 
-        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: nil) { [weak self] buffer, _ in
             guard let self = self else { return }
 
-            if let converter = converter {
+            // Lazily create converter on first callback (actual format)
+            if !tapConverterCreated {
+                tapConverterCreated = true
+                let fmt = buffer.format
+                let needsConv = abs(fmt.sampleRate - Constants.sampleRate) > 1.0
+                    || fmt.channelCount != 1
+                if needsConv {
+                    tapConverter = AVAudioConverter(from: fmt, to: targetFormat)
+                }
+                print("Magpi: Tap delivering: \(Int(fmt.sampleRate))Hz/\(fmt.channelCount)ch, conversion=\(needsConv)")
+            }
+
+            if let conv = tapConverter {
+                let bufferFormat = buffer.format
                 let frameCount = AVAudioFrameCount(
-                    Double(buffer.frameLength) * Constants.sampleRate / inputFormat.sampleRate
+                    Double(buffer.frameLength) * Constants.sampleRate / bufferFormat.sampleRate
                 )
-                guard let convertedBuffer = AVAudioPCMBuffer(
+                guard frameCount > 0, let convertedBuffer = AVAudioPCMBuffer(
                     pcmFormat: targetFormat,
                     frameCapacity: frameCount
                 ) else { return }
 
                 var error: NSError?
-                let status = converter.convert(to: convertedBuffer, error: &error) { _, outStatus in
+                let status = conv.convert(to: convertedBuffer, error: &error) { _, outStatus in
                     outStatus.pointee = .haveData
                     return buffer
                 }
@@ -104,16 +125,17 @@ final class AudioCaptureSession {
                     self.deliverBuffer(convertedBuffer)
                 }
             } else {
-                // Format already matches
                 self.deliverBuffer(buffer)
             }
         }
 
+        // Step 4: Prepare and start.
+        engine.prepare()
         try engine.start()
         audioEngine = engine
         isRunning = true
 
-        print("Magpi: Audio capture started (\(Int(inputFormat.sampleRate))Hz → 16kHz, voice processing: \(inputNode.isVoiceProcessingEnabled ? "on" : "off"))")
+        print("Magpi: Audio capture started (voiceProcessing=\(voiceProcessingEnabled))")
     }
 
     func stop() {
@@ -123,6 +145,7 @@ final class AudioCaptureSession {
         audioEngine?.inputNode.removeTap(onBus: 0)
         audioEngine = nil
         isRunning = false
+        voiceProcessingEnabled = false
 
         print("Magpi: Audio capture stopped")
     }
@@ -134,8 +157,8 @@ final class AudioCaptureSession {
     private func deliverBuffer(_ buffer: AVAudioPCMBuffer) {
         guard let channelData = buffer.floatChannelData?[0] else { return }
         let frameLength = Int(buffer.frameLength)
+        guard frameLength > 0 else { return }
 
-        // Copy samples to array
         let samples = Array(UnsafeBufferPointer(start: channelData, count: frameLength))
 
         // Calculate RMS for level meter
@@ -152,7 +175,6 @@ final class AudioCaptureSession {
             self?.onAudioLevel?(level)
         }
 
-        // Deliver samples to the conversation loop
         onAudioFrame?(samples)
     }
 

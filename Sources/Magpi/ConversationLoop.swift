@@ -124,7 +124,9 @@ final class ConversationLoop: ObservableObject {
                 return
             }
 
-            try audioCapture.start()
+            // Start audio capture. Set MAGPI_NO_AEC=1 to disable voice processing.
+            let enableAEC = ProcessInfo.processInfo.environment["MAGPI_NO_AEC"] != "1"
+            try audioCapture.start(enableVoiceProcessing: enableAEC)
 
             // Attach audio player to the same engine for echo cancellation
             if let engine = audioCapture.audioEngine {

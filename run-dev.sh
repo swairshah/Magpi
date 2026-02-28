@@ -11,5 +11,9 @@ fi
 export MAGPI_LOG_LEVEL=debug
 export DYLD_LIBRARY_PATH="$(pwd)/vendor/onnxruntime/lib:${DYLD_LIBRARY_PATH:-}"
 
+# Set MAGPI_NO_AEC=1 to disable echo cancellation (voice processing)
+# Useful if voice processing is causing issues with audio capture
+# export MAGPI_NO_AEC=1
+
 swift build 2>&1
 exec .build/debug/Magpi "$@"
