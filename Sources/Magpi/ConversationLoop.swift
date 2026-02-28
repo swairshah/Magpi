@@ -125,6 +125,14 @@ final class ConversationLoop: ObservableObject {
             }
 
             try audioCapture.start()
+
+            // Attach audio player to the same engine for echo cancellation
+            if let engine = audioCapture.audioEngine {
+                audioPlayer.attach(to: engine)
+            } else {
+                print("Magpi: Warning — no audio engine, AEC will not work")
+            }
+
             state = .idle
 
             print("Magpi: Conversation loop started ✓")
@@ -136,8 +144,8 @@ final class ConversationLoop: ObservableObject {
 
     /// Stop the conversation loop.
     func stop() {
+        audioPlayer.detach()
         audioCapture.stop()
-        audioPlayer.stop()
         ttsEngine.stopServer()
         piBridge.stopBroker()
         piRPC.stop()
