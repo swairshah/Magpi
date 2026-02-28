@@ -1,0 +1,24 @@
+# Build
+.build/
+*.o
+*.d
+
+# Swift Package Manager
+.swiftpm/
+Package.resolved
+
+# Vendor (downloaded at setup time)
+vendor/
+
+# Models (downloaded at setup time)
+models/
+
+# macOS
+.DS_Store
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+
+# IDE
+.vscode/
+.idea/
