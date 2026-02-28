@@ -38,6 +38,10 @@ final class AudioCaptureSession {
     /// Whether voice processing (AEC) is enabled.
     private(set) var voiceProcessingEnabled = false
 
+    /// Called after voice processing is configured but BEFORE engine starts.
+    /// Use this to attach player nodes to the engine.
+    var onEngineReady: ((AVAudioEngine) -> Void)?
+
     init() {}
 
     deinit {
@@ -129,7 +133,11 @@ final class AudioCaptureSession {
             }
         }
 
-        // Step 4: Prepare and start.
+        // Step 4: Let other components attach nodes BEFORE starting.
+        // This is critical — player nodes must be in the graph before start().
+        onEngineReady?(engine)
+
+        // Step 5: Prepare and start.
         engine.prepare()
         try engine.start()
         audioEngine = engine

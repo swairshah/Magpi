@@ -124,16 +124,14 @@ final class ConversationLoop: ObservableObject {
                 return
             }
 
+            // Attach audio player to engine BEFORE it starts (required for AEC)
+            audioCapture.onEngineReady = { [weak self] engine in
+                self?.audioPlayer.attach(to: engine)
+            }
+
             // Start audio capture. Set MAGPI_NO_AEC=1 to disable voice processing.
             let enableAEC = ProcessInfo.processInfo.environment["MAGPI_NO_AEC"] != "1"
             try audioCapture.start(enableVoiceProcessing: enableAEC)
-
-            // Attach audio player to the same engine for echo cancellation
-            if let engine = audioCapture.audioEngine {
-                audioPlayer.attach(to: engine)
-            } else {
-                print("Magpi: Warning — no audio engine, AEC will not work")
-            }
 
             state = .idle
 

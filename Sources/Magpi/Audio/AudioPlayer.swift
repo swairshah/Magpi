@@ -23,22 +23,22 @@ final class AudioPlayer {
     }
 
     /// Attach this player to an AVAudioEngine.
-    /// Must be called before play(). The engine should already have
-    /// voice processing enabled on input/output nodes.
+    /// Must be called BEFORE engine.start() so voice processing
+    /// sees the player node in the graph.
     func attach(to engine: AVAudioEngine) {
         let node = AVAudioPlayerNode()
         engine.attach(node)
 
-        // Connect player to the main mixer → output
-        // Use the engine's output format so the audio routes through
-        // voice processing for AEC reference
-        let outputFormat = engine.outputNode.inputFormat(forBus: 0)
-        engine.connect(node, to: engine.mainMixerNode, format: outputFormat)
+        // Connect to mainMixerNode using the input node's output format.
+        // Per Apple docs: when voice processing is enabled, all nodes in the
+        // chain must use the same format as the input node's output.
+        let connectFormat = engine.inputNode.outputFormat(forBus: 0)
+        engine.connect(node, to: engine.mainMixerNode, format: connectFormat)
 
         self.playerNode = node
         self.engine = engine
 
-        print("Magpi: AudioPlayer attached to engine (output: \(Int(outputFormat.sampleRate))Hz, \(outputFormat.channelCount)ch)")
+        print("Magpi: AudioPlayer attached (format: \(Int(connectFormat.sampleRate))Hz, \(connectFormat.channelCount)ch)")
     }
 
     /// Play raw PCM audio data (s16le, 24kHz, mono).
