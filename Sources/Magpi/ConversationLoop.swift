@@ -180,10 +180,17 @@ final class ConversationLoop: ObservableObject {
 
         Write a JSON file to the agent's inbox directory:
         ```
-        echo '{"text":"your message here","source":"magpi","timestamp":'$(date +%s000)'}' > \(home)/.pi/agent/pitalk-inbox/<PID>/$(date +%s%3N).json
+        echo '{"text":"your message here","source":"magpi","deliverAs":"followUp","timestamp":'$(date +%s000)'}' > \(home)/.pi/agent/pitalk-inbox/<PID>/$(date +%s%3N).json
         ```
         The pi-talk extension watches this directory and injects the message into the Pi session.
         The PID must match a running agent from the status command.
+
+        The `deliverAs` field controls how the message is delivered:
+        - `"followUp"` (preferred) — waits until the agent finishes its current task, then delivers. Non-disruptive.
+        - `"steer"` — interrupts the agent mid-task. Use only when the user explicitly wants to interrupt or redirect.
+        - `"nextTurn"` — queued silently, delivered on the agent's next user prompt.
+        
+        Default to `"followUp"` unless the user says something like "stop it", "interrupt", or "cancel".
 
         ## Important Guidelines
         - Keep responses concise and conversational — the user is LISTENING, not reading
