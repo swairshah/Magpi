@@ -509,7 +509,9 @@ final class ConversationLoop: ObservableObject {
 
         isRecordToggleActive = false  // Always reset toggle when transcribing
         state = .transcribing
-        print("Magpi: → TRANSCRIBING (\(String(format: "%.1f", audioBuffer.duration))s of audio)")
+        let duration = String(format: "%.1f", audioBuffer.duration)
+        print("Magpi: → TRANSCRIBING (\(duration)s of audio)")
+        transcript.addLog("Transcribing \(duration)s of audio...")
 
         let audioURL = Constants.tempAudioURL
 
@@ -524,9 +526,12 @@ final class ConversationLoop: ObservableObject {
 
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 print("Magpi: Empty transcription, returning to idle")
+                transcript.addLog("Empty transcription — returning to idle")
                 state = .idle
                 return
             }
+
+            transcript.addLog("Transcribed: \"\(text.prefix(120))\"")
 
             // Add to transcript
             transcript.addUserMessage(text)
@@ -550,6 +555,7 @@ final class ConversationLoop: ObservableObject {
 
             state = .waiting
             print("Magpi: → WAITING")
+            transcript.addLog("→ Waiting for response...")
 
             // Timeout
             Task {
