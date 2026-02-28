@@ -1,0 +1,7 @@
+{
+  "name": "pi-report",
+  "private": true,
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}

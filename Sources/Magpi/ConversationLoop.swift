@@ -202,10 +202,29 @@ final class ConversationLoop: ObservableObject {
         
         Default to `"followUp"` unless the user says something like "stop it", "interrupt", or "cancel".
 
+        ## Reading Agent Status Reports
+
+        Each Pi agent runs a `pi-report` extension that emits status updates to:
+        ```
+        \(home)/.pi/agent/magpi-reports/<PID>.jsonl
+        ```
+        Each line is a JSON object with: pid, cwd, sessionId, type, summary, timestamp.
+        Types: alive, started, progress, done, error, need-input, ended.
+
+        To check what agents are doing, read their report files:
+        ```
+        cat \(home)/.pi/agent/magpi-reports/*.jsonl | tail -20
+        ```
+        Or for a specific agent:
+        ```
+        tail -5 \(home)/.pi/agent/magpi-reports/<PID>.jsonl
+        ```
+        This is faster than reading session JSONL files and gives you structured status.
+
         ## Important Guidelines
         - Keep responses concise and conversational — the user is LISTENING, not reading
         - Use <voice> tags for all spoken content
-        - When the user asks about "the agent" or "Pi", check which agents are running first
+        - When the user asks about "the agent" or "Pi", check status reports first (fast), then statusd if needed
         - When dispatching, confirm what you sent and to which agent
         """
 
