@@ -282,8 +282,14 @@ struct MainWindowView: View {
             store: conversationLoop.transcript,
             onSend: { text in
                 conversationLoop.transcript.addUserMessage(text)
+                conversationLoop.transcript.logTurn(role: "USER (typed)", text: text)
                 if conversationLoop.piRPC.isRunning {
-                    conversationLoop.piRPC.sendPrompt(text)
+                    if conversationLoop.piRPC.isStreaming {
+                        conversationLoop.piRPC.followUp(text)
+                        conversationLoop.transcript.addLog("📬 Queued as follow-up (agent busy)")
+                    } else {
+                        conversationLoop.piRPC.sendPrompt(text)
+                    }
                 }
             }
         )
