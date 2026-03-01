@@ -21,6 +21,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var conversationLoop: ConversationLoop!
     private var mainWindow: NSWindow?
     private var globalHotkeyMonitor: Any?
+    // Carbon hotkey for Cmd+. (stop speech)
+    private var carbonEventHandler: EventHandlerRef?
+    private var carbonHotKeyRef: EventHotKeyRef?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Show dock icon — this is a proper app, not just a menubar accessory
@@ -83,6 +86,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let monitor = globalHotkeyMonitor {
             NSEvent.removeMonitor(monitor)
         }
+        if let ref = carbonHotKeyRef {
+            UnregisterEventHotKey(ref)
+        }
+        if let handler = carbonEventHandler {
+            RemoveEventHandler(handler)
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -130,6 +139,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Global Hotkeys
 
     private func registerGlobalHotkeys() {
+        // NSEvent monitor for Alt+S, Alt+B (works when app is not focused)
         globalHotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
@@ -151,7 +161,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
         }
-        print("Magpi: Global hotkeys: ⌥S = record toggle, ⌥B = barge-in toggle")
+
+        // Carbon global hotkey for Cmd+. (stop speech) — works everywhere
+        registerCmdPeriodHotkey()
+
+        print("Magpi: Global hotkeys: ⌘. = stop speech, ⌥S = record toggle, ⌥B = barge-in toggle")
+    }
+
+    private func registerCmdPeriodHotkey() {
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+        )
+
+        let handler: EventHandlerUPP = { _, event, userData -> OSStatus in
+            guard let userData = userData else { return OSStatus(eventNotHandledErr) }
+            let appDelegate = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
+            DispatchQueue.main.async {
+                appDelegate.conversationLoop?.stopSpeech()
+                print("Magpi: ⌘. Stop speech")
+            }
+            return noErr
+        }
+
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        InstallEventHandler(
+            GetApplicationEventTarget(),
+            handler, 1, &eventType,
+            selfPtr, &carbonEventHandler
+        )
+
+        // Key code 47 = period (.)
+        let hotKeyID = EventHotKeyID(signature: OSType(0x4D414750), id: 1) // "MAGP"
+        let modifiers: UInt32 = UInt32(cmdKey)
+        RegisterEventHotKey(
+            47, modifiers, hotKeyID,
+            GetApplicationEventTarget(), 0,
+            &carbonHotKeyRef
+        )
     }
 
     // MARK: - Private

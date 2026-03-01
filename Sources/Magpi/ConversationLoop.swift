@@ -642,10 +642,20 @@ final class ConversationLoop: ObservableObject {
     }
 
     private func handleStopRequest() {
+        stopSpeech()
+    }
+
+    /// Stop all TTS playback and clear the speech queue. (Cmd+.)
+    func stopSpeech() {
         audioPlayer.stop()
         clearSpeechQueue()
         if state == .speaking {
             state = .idle
+        }
+        // Also abort the agent if it's still streaming
+        if piRPC.isStreaming {
+            piRPC.abort()
+            transcript.addLog("⏹ Stopped (Cmd+.)")
         }
     }
 
