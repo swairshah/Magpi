@@ -194,49 +194,57 @@ struct MessageBubble: View {
     let message: TranscriptStore.Message
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: iconName)
-                .foregroundColor(iconColor)
-                .font(.caption)
-                .frame(width: 16)
+        HStack(alignment: .top, spacing: 0) {
+            // Timestamp
+            Text(timeString)
+                .font(.caption.monospaced())
+                .foregroundColor(.secondary.opacity(0.5))
+                .frame(width: 48, alignment: .trailing)
                 .padding(.top, 2)
 
+            // Timeline bar
+            Rectangle()
+                .fill(timelineColor)
+                .frame(width: 2)
+                .padding(.horizontal, 8)
+
+            // Icon
+            Image(systemName: iconName)
+                .foregroundColor(iconColor)
+                .font(.caption2)
+                .frame(width: 16)
+                .padding(.top, 3)
+
+            // Content
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(roleLabel)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .bold()
-
-                    Text(timeString)
-                        .font(.caption2)
-                        .foregroundColor(.secondary.opacity(0.6))
-                }
-
                 Text(displayText)
                     .textSelection(.enabled)
-                    .font(.body)
+                    .font(.callout)
                     .foregroundColor(textColor)
 
                 if !message.isComplete {
-                    ProgressView()
-                        .controlSize(.small)
-                        .padding(.top, 2)
+                    HStack(spacing: 4) {
+                        ProgressView()
+                            .controlSize(.mini)
+                        Text("thinking…")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.top, 1)
                 }
             }
+            .padding(.leading, 6)
+            .padding(.vertical, 5)
 
-            Spacer()
+            Spacer(minLength: 16)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(backgroundColor)
-        .cornerRadius(8)
+        .padding(.leading, 8)
     }
 
     private var iconName: String {
         switch message.role {
         case .user: return "person.fill"
-        case .assistant: return "bird.fill"
+        case .assistant: return "sparkle"
         case .system: return "info.circle"
         }
     }
@@ -249,26 +257,19 @@ struct MessageBubble: View {
         }
     }
 
-    private var roleLabel: String {
-        switch message.role {
-        case .user: return "You"
-        case .assistant: return "Magpi"
-        case .system: return "System"
-        }
-    }
-
     private var textColor: Color {
         switch message.role {
         case .system: return .secondary
-        default: return .primary
+        case .user: return .primary
+        case .assistant: return .primary.opacity(0.85)
         }
     }
 
-    private var backgroundColor: Color {
+    private var timelineColor: Color {
         switch message.role {
-        case .user: return Color(white: 0.5).opacity(0.12)
-        case .assistant: return Color(white: 0.5).opacity(0.06)
-        case .system: return Color(white: 0.5).opacity(0.04)
+        case .user: return .blue.opacity(0.3)
+        case .assistant: return .green.opacity(0.2)
+        case .system: return .orange.opacity(0.15)
         }
     }
 
@@ -281,7 +282,7 @@ struct MessageBubble: View {
 
     private var timeString: String {
         let f = DateFormatter()
-        f.dateFormat = "h:mm a"
+        f.dateFormat = "h:mm"
         return f.string(from: message.timestamp)
     }
 }

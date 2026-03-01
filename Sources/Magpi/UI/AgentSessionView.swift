@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Shows a spoke agent's session conversation history + send bar.
-/// Reads the agent's JSONL session file and displays messages.
+/// Shows a spoke agent's session as an event timeline.
+/// Inspired by session replay UIs — timestamped events with colored icons.
 struct AgentSessionView: View {
     let agent: AgentStore.AgentInfo
     let agentStore: AgentStore
@@ -9,48 +9,26 @@ struct AgentSessionView: View {
     @State private var messages: [SessionReader.SessionMessage] = []
     @State private var isLoading = true
     @State private var inputText = ""
-    @State private var lastLoadTime = Date.distantPast
-
-    private static let relativeDateFormatter: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .short
-        return f
-    }()
+    @State private var sessionStartTime: Date?
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
             agentHeader
-                .padding(12)
-                .background(.bar)
-
             Divider()
 
-            // Messages
             if isLoading {
-                ProgressView("Loading session...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Spacer()
+                ProgressView()
+                    .controlSize(.regular)
+                Spacer()
             } else if messages.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "text.bubble")
-                        .font(.title2)
-                        .foregroundColor(.secondary.opacity(0.4))
-                    Text("No messages in this session")
-                        .foregroundColor(.secondary)
-                    Text("Session file may not exist yet")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                emptyState
             } else {
-                messageList
+                eventTimeline
             }
 
             Divider()
-
-            // Send bar
             sendBar
-                .padding(12)
         }
         .onAppear { loadMessages() }
         .onChange(of: agent.pid) { loadMessages() }
@@ -59,79 +37,106 @@ struct AgentSessionView: View {
     // MARK: - Header
 
     private var agentHeader: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(activityColor)
-                .frame(width: 10, height: 10)
+        VStack(alignment: .leading, spacing: 8) {
+            // Title row
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(activityColor)
+                    .frame(width: 8, height: 8)
 
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(agent.projectName)
-                        .font(.headline)
-                    Text("PID \(agent.pid)")
-                        .font(.caption.monospaced())
-                        .foregroundColor(.secondary)
-                }
+                Text(agent.projectName)
+                    .font(.title3.weight(.semibold))
 
-                HStack(spacing: 8) {
-                    Text(activityLabel)
+                Spacer()
+
+                Button {
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        _ = DaemonClient.jump(pid: agent.pid)
+                    }
+                } label: {
+                    Label("Jump", systemImage: "rectangle.portrait.and.arrow.forward")
                         .font(.caption.weight(.medium))
-                        .foregroundColor(activityColor)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
 
-                    if let mux = agent.mux, !mux.isEmpty {
-                        Text(mux)
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(RoundedRectangle(cornerRadius: 3).fill(Color.secondary.opacity(0.1)))
+                Button {
+                    loadMessages()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .help("Reload")
+            }
+
+            // Tags row
+            HStack(spacing: 6) {
+                tagPill(agent.projectName, color: .blue)
+
+                if agent.isOrphaned {
+                    tagPill("orphan", color: .orange)
+                }
+
+                tagPill("PID \(agent.pid)", color: .secondary)
+
+                if let mux = agent.mux, !mux.isEmpty {
+                    tagPill(mux, color: .purple)
+                }
+
+                Spacer()
+
+                // Stats
+                HStack(spacing: 12) {
+                    let userCount = messages.filter { $0.role == .user }.count
+                    let assistantCount = messages.filter { $0.role == .assistant }.count
+                    let toolCount = messages.flatMap { $0.toolCalls }.count
+
+                    if userCount > 0 {
+                        statBadge("person.fill", count: userCount)
                     }
-
-                    if let status = agent.lastStatusSummary {
-                        Text("• \(status)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
+                    if assistantCount > 0 {
+                        statBadge("brain", count: assistantCount)
+                    }
+                    if toolCount > 0 {
+                        statBadge("wrench.fill", count: toolCount)
                     }
                 }
             }
 
-            Spacer()
-
-            Button {
-                DispatchQueue.global(qos: .userInitiated).async {
-                    _ = DaemonClient.jump(pid: agent.pid)
-                }
-            } label: {
-                Label("Jump", systemImage: "rectangle.portrait.and.arrow.forward")
+            // Activity status
+            HStack(spacing: 6) {
+                Text(activityLabel)
                     .font(.caption.weight(.medium))
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+                    .foregroundColor(activityColor)
 
-            Button {
-                loadMessages()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.caption)
+                if let status = agent.lastStatusSummary {
+                    Text("•")
+                        .foregroundColor(.secondary)
+                    Text(status)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
             }
-            .buttonStyle(.borderless)
-            .help("Reload session")
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color(white: 0.5).opacity(0.04))
     }
 
-    // MARK: - Message List
+    // MARK: - Event Timeline
 
-    private var messageList: some View {
+    private var eventTimeline: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(messages) { message in
-                        sessionMessageRow(message)
+                        eventRow(message)
                             .id(message.id)
                     }
                 }
-                .padding(16)
+                .padding(.vertical, 8)
             }
             .onAppear {
                 if let last = messages.last {
@@ -149,42 +154,41 @@ struct AgentSessionView: View {
     }
 
     @ViewBuilder
-    private func sessionMessageRow(_ message: SessionReader.SessionMessage) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: roleIcon(message.role))
-                .foregroundColor(roleColor(message.role))
-                .font(.caption)
-                .frame(width: 16)
+    private func eventRow(_ message: SessionReader.SessionMessage) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            // Timestamp column
+            Text(relativeTime(message.timestamp))
+                .font(.caption.monospaced())
+                .foregroundColor(.secondary.opacity(0.6))
+                .frame(width: 52, alignment: .trailing)
                 .padding(.top, 2)
 
+            // Timeline bar
+            VStack(spacing: 0) {
+                Rectangle()
+                    .fill(timelineColor(message.role))
+                    .frame(width: 2)
+            }
+            .padding(.horizontal, 8)
+
+            // Icon
+            eventIcon(message)
+                .frame(width: 18)
+                .padding(.top, 2)
+
+            // Content
             VStack(alignment: .leading, spacing: 3) {
-                // Role + timestamp
-                HStack(spacing: 4) {
-                    Text(roleLabel(message.role))
-                        .font(.caption2.weight(.bold))
-                        .foregroundColor(.secondary)
-
-                    Text(timeString(message.timestamp))
-                        .font(.caption2)
-                        .foregroundColor(.secondary.opacity(0.6))
-                }
-
-                // Tool calls
-                if !message.toolCalls.isEmpty {
-                    ForEach(Array(message.toolCalls.enumerated()), id: \.offset) { _, tool in
-                        HStack(spacing: 4) {
-                            Image(systemName: "wrench.fill")
-                                .font(.caption2)
-                                .foregroundColor(.orange)
-                            Text(tool.name)
-                                .font(.caption.monospaced())
-                                .foregroundColor(.orange)
-                            if let preview = tool.resultPreview, !preview.isEmpty {
-                                Text("→ \(preview.prefix(80))")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(1)
-                            }
+                // Tool calls (shown before text, like the reference app)
+                ForEach(Array(message.toolCalls.enumerated()), id: \.offset) { _, tool in
+                    HStack(spacing: 4) {
+                        Text(toolLabel(tool.name))
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(toolColor(tool.name))
+                        if let preview = tool.resultPreview, !preview.isEmpty {
+                            Text(preview.prefix(80))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
                         }
                     }
                 }
@@ -192,76 +196,180 @@ struct AgentSessionView: View {
                 // Message text
                 if !message.text.isEmpty {
                     Text(cleanText(message.text))
+                        .font(.callout)
                         .textSelection(.enabled)
-                        .font(.body)
-                        .foregroundColor(message.role == .system ? .secondary : .primary)
+                        .foregroundColor(message.role == .user ? .primary : .primary.opacity(0.85))
+                        .lineLimit(message.role == .user ? nil : 4)
                 }
             }
+            .padding(.leading, 6)
+            .padding(.vertical, 6)
 
-            Spacer()
+            Spacer(minLength: 16)
+
+            // Token count placeholder for assistant messages
+            if message.role == .assistant && !message.text.isEmpty {
+                Text("\(message.text.count)")
+                    .font(.caption2.monospaced())
+                    .foregroundColor(.secondary.opacity(0.3))
+                    .padding(.top, 8)
+                    .padding(.trailing, 16)
+            }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(roleBackground(message.role))
-        .cornerRadius(8)
+        .padding(.leading, 8)
+        .contentShape(Rectangle())
+    }
+
+    // MARK: - Empty State
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "text.bubble")
+                .font(.title2)
+                .foregroundColor(.secondary.opacity(0.3))
+            Text("No session data")
+                .foregroundColor(.secondary)
+            Text("Session file may not exist yet")
+                .font(.caption)
+                .foregroundColor(.secondary.opacity(0.6))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Send Bar
 
     private var sendBar: some View {
         HStack(spacing: 8) {
-            TextField("Send to \(agent.projectName)...", text: $inputText)
-                .textFieldStyle(.roundedBorder)
+            TextField("Send to \(agent.projectName)…", text: $inputText)
+                .textFieldStyle(.plain)
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(white: 0.5).opacity(0.08))
+                )
                 .onSubmit { send() }
 
             Button {
                 send()
             } label: {
-                Image(systemName: "paperplane.fill")
-                    .font(.body)
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.title2)
+                    .foregroundColor(
+                        inputText.trimmingCharacters(in: .whitespaces).isEmpty
+                        ? .secondary.opacity(0.3) : .accentColor
+                    )
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.plain)
             .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty)
         }
-    }
-
-    // MARK: - Actions
-
-    private func send() {
-        let text = inputText.trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty else { return }
-        agentStore.sendToAgent(pid: agent.pid, text: text)
-        inputText = ""
-
-        // Reload after a brief delay to show the new message
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            loadMessages()
-        }
-    }
-
-    private func loadMessages() {
-        isLoading = true
-        let pid = agent.pid
-        DispatchQueue.global(qos: .userInteractive).async {
-            let cwd = agent.cwd
-            let msgs: [SessionReader.SessionMessage]
-
-            // Use PID-based matching to find this agent's specific session file
-            if let sessionURL = SessionReader.sessionFile(cwd: cwd, pid: pid) {
-                msgs = SessionReader.readMessages(from: sessionURL, maxMessages: 80)
-            } else {
-                msgs = []
-            }
-
-            DispatchQueue.main.async {
-                self.messages = msgs
-                self.isLoading = false
-                self.lastLoadTime = Date()
-            }
-        }
+        .padding(12)
     }
 
     // MARK: - Helpers
+
+    private func tagPill(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.caption2.weight(.medium))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(color.opacity(0.12))
+            )
+            .foregroundColor(color)
+    }
+
+    private func statBadge(_ icon: String, count: Int) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.caption2)
+            Text("\(count)")
+                .font(.caption2.monospacedDigit())
+        }
+        .foregroundColor(.secondary)
+    }
+
+    private func eventIcon(_ message: SessionReader.SessionMessage) -> some View {
+        Group {
+            switch message.role {
+            case .user:
+                Image(systemName: "person.fill")
+                    .font(.caption2)
+                    .foregroundColor(.blue)
+            case .assistant:
+                if !message.toolCalls.isEmpty {
+                    Image(systemName: "wrench.fill")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                } else {
+                    Image(systemName: "sparkle")
+                        .font(.caption2)
+                        .foregroundColor(.green)
+                }
+            case .system:
+                Image(systemName: "info.circle")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private func timelineColor(_ role: SessionReader.SessionMessage.Role) -> Color {
+        switch role {
+        case .user: return .blue.opacity(0.3)
+        case .assistant: return .green.opacity(0.2)
+        case .system: return .secondary.opacity(0.1)
+        }
+    }
+
+    private func toolLabel(_ name: String) -> String {
+        // Capitalize known tool names like the reference app
+        switch name.lowercased() {
+        case "read": return "Read"
+        case "write": return "Write"
+        case "edit": return "Edit"
+        case "bash": return "Bash"
+        case "web_search": return "Search"
+        case "fetch_content": return "Fetch"
+        default: return name
+        }
+    }
+
+    private func toolColor(_ name: String) -> Color {
+        switch name.lowercased() {
+        case "read": return .cyan
+        case "write": return .green
+        case "edit": return .yellow
+        case "bash": return .orange
+        case "web_search", "fetch_content": return .purple
+        default: return .orange
+        }
+    }
+
+    private func relativeTime(_ date: Date) -> String {
+        guard let start = sessionStartTime else {
+            let f = DateFormatter()
+            f.dateFormat = "h:mm"
+            return f.string(from: date)
+        }
+        let elapsed = date.timeIntervalSince(start)
+        if elapsed < 0 { return "+0:00" }
+        let mins = Int(elapsed) / 60
+        let secs = Int(elapsed) % 60
+        if mins >= 60 {
+            let hrs = mins / 60
+            let m = mins % 60
+            return "+\(hrs):\(String(format: "%02d", m)):\(String(format: "%02d", secs))"
+        }
+        return "+\(mins):\(String(format: "%02d", secs))"
+    }
+
+    private func cleanText(_ text: String) -> String {
+        text.replacingOccurrences(of: "<voice>", with: "")
+            .replacingOccurrences(of: "</voice>", with: "")
+            .replacingOccurrences(of: #"<status>[^<]*</status>"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     private var activityColor: Color {
         switch agent.activity {
@@ -279,50 +387,36 @@ struct AgentSessionView: View {
         }
     }
 
-    private func roleIcon(_ role: SessionReader.SessionMessage.Role) -> String {
-        switch role {
-        case .user: return "person.fill"
-        case .assistant: return "brain"
-        case .system: return "info.circle"
+    // MARK: - Actions
+
+    private func send() {
+        let text = inputText.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return }
+        agentStore.sendToAgent(pid: agent.pid, text: text)
+        inputText = ""
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { loadMessages() }
+    }
+
+    private func loadMessages() {
+        isLoading = true
+        let pid = agent.pid
+        DispatchQueue.global(qos: .userInteractive).async {
+            let cwd = agent.cwd
+            let msgs: [SessionReader.SessionMessage]
+
+            if let sessionURL = SessionReader.sessionFile(cwd: cwd, pid: pid) {
+                msgs = SessionReader.readMessages(from: sessionURL, maxMessages: 80)
+            } else {
+                msgs = []
+            }
+
+            let startTime = msgs.first?.timestamp
+
+            DispatchQueue.main.async {
+                self.messages = msgs
+                self.sessionStartTime = startTime
+                self.isLoading = false
+            }
         }
-    }
-
-    private func roleColor(_ role: SessionReader.SessionMessage.Role) -> Color {
-        switch role {
-        case .user: return .blue
-        case .assistant: return .green
-        case .system: return .orange
-        }
-    }
-
-    private func roleLabel(_ role: SessionReader.SessionMessage.Role) -> String {
-        switch role {
-        case .user: return "User"
-        case .assistant: return "Assistant"
-        case .system: return "System"
-        }
-    }
-
-    private func roleBackground(_ role: SessionReader.SessionMessage.Role) -> Color {
-        switch role {
-        case .user: return Color(white: 0.5).opacity(0.12)
-        case .assistant: return Color(white: 0.5).opacity(0.06)
-        case .system: return Color(white: 0.5).opacity(0.04)
-        }
-    }
-
-    private func cleanText(_ text: String) -> String {
-        text.replacingOccurrences(of: "<voice>", with: "")
-            .replacingOccurrences(of: "</voice>", with: "")
-            .replacingOccurrences(of: "<status>", with: "")
-            .replacingOccurrences(of: "</status>", with: "")
-            .replacingOccurrences(of: #"<status>[^<]*</status>"#, with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func timeString(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "h:mm a"
-        return f.string(from: date)
     }
 }

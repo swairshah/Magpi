@@ -490,7 +490,7 @@ struct ConversationView: View {
     private var chatView: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(store.messages) { message in
                         MessageBubble(message: message)
                             .id(message.id)
@@ -500,15 +500,16 @@ struct ConversationView: View {
                         VStack(spacing: 8) {
                             Image(systemName: "bird")
                                 .font(.largeTitle)
-                                .foregroundColor(.secondary.opacity(0.4))
+                                .foregroundColor(.secondary.opacity(0.3))
                             Text("Start speaking or type a message")
-                                .foregroundColor(.secondary)
+                                .font(.callout)
+                                .foregroundColor(.secondary.opacity(0.6))
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.top, 80)
                     }
                 }
-                .padding(16)
+                .padding(.vertical, 8)
             }
             .onChange(of: store.messages.count) {
                 if let last = store.messages.last {
@@ -544,17 +545,26 @@ struct ConversationView: View {
 
     private var inputBar: some View {
         HStack(spacing: 8) {
-            TextField("Type a message...", text: $inputText)
-                .textFieldStyle(.roundedBorder)
+            TextField("Type a message…", text: $inputText)
+                .textFieldStyle(.plain)
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(white: 0.5).opacity(0.08))
+                )
                 .onSubmit { send() }
 
             Button {
                 send()
             } label: {
-                Image(systemName: "paperplane.fill")
-                    .font(.body)
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.title2)
+                    .foregroundColor(
+                        inputText.trimmingCharacters(in: .whitespaces).isEmpty
+                        ? .secondary.opacity(0.3) : .accentColor
+                    )
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.plain)
             .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty)
             .keyboardShortcut(.return, modifiers: [])
         }
