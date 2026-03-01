@@ -115,6 +115,7 @@ final class TranscriptStore: ObservableObject {
 
     /// Load conversation history from a Pi session directory.
     /// Reads the latest session JSONL file and populates the messages array.
+    /// Runs file I/O on a background thread.
     func loadHistory(fromSessionDir dir: String) {
         guard FileManager.default.fileExists(atPath: dir) else { return }
 
@@ -124,34 +125,37 @@ final class TranscriptStore: ObservableObject {
         guard let latest = jsonlFiles.first else { return }
 
         let url = URL(fileURLWithPath: dir).appendingPathComponent(latest)
-        let sessionMessages = SessionReader.readMessages(from: url, maxMessages: 100)
 
-        guard !sessionMessages.isEmpty else { return }
+        // Read on background thread
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let sessionMessages = SessionReader.readMessages(from: url, maxMessages: 100)
+            guard !sessionMessages.isEmpty else { return }
 
-        // Convert to TranscriptStore messages
-        var loaded: [Message] = []
-        for msg in sessionMessages {
-            let role: Message.Role
-            switch msg.role {
-            case .user: role = .user
-            case .assistant: role = .assistant
-            case .system: role = .system
+            // Convert to TranscriptStore messages
+            var loaded: [Message] = []
+            for msg in sessionMessages {
+                let role: Message.Role
+                switch msg.role {
+                case .user: role = .user
+                case .assistant: role = .assistant
+                case .system: role = .system
+                }
+
+                let text = msg.text
+                    .replacingOccurrences(of: "<voice>", with: "")
+                    .replacingOccurrences(of: "</voice>", with: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                if !text.isEmpty {
+                    loaded.append(Message(role: role, text: text, isComplete: true))
+                }
             }
 
-            // Clean text for display
-            let text = msg.text
-                .replacingOccurrences(of: "<voice>", with: "")
-                .replacingOccurrences(of: "</voice>", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-
-            if !text.isEmpty {
-                loaded.append(Message(role: role, text: text, isComplete: true))
+            Task { @MainActor [weak self] in
+                guard let self = self, !loaded.isEmpty else { return }
+                self.messages = loaded
+                self.addLog("📖 Loaded \(loaded.count) messages from previous session")
             }
-        }
-
-        if !loaded.isEmpty {
-            messages = loaded
-            addLog("📖 Loaded \(loaded.count) messages from previous session")
         }
     }
 

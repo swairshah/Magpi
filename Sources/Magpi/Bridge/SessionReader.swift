@@ -89,28 +89,44 @@ enum SessionReader {
 
     /// Read messages from a session JSONL file.
     /// Returns the last N messages for display.
+    /// Uses streaming read to avoid loading entire file into memory.
     static func readMessages(from url: URL, maxMessages: Int = 50) -> [SessionMessage] {
-        guard let data = try? Data(contentsOf: url),
-              let content = String(data: data, encoding: .utf8) else {
-            return []
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return [] }
+        defer { handle.closeFile() }
+
+        var messages: [SessionMessage] = []
+        var buffer = Data()
+        let chunkSize = 64 * 1024 // 64KB chunks
+
+        while true {
+            let chunk = handle.readData(ofLength: chunkSize)
+            if chunk.isEmpty { break }
+            buffer.append(chunk)
+
+            // Process complete lines from buffer
+            while let newlineRange = buffer.range(of: Data([0x0A])) {
+                let lineData = buffer[buffer.startIndex..<newlineRange.lowerBound]
+                buffer.removeSubrange(buffer.startIndex...newlineRange.lowerBound)
+
+                guard !lineData.isEmpty,
+                      let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                      let type = obj["type"] as? String,
+                      type == "message",
+                      let msg = parseMessage(obj) else {
+                    continue
+                }
+
+                messages.append(msg)
+            }
         }
 
-        let lines = content.components(separatedBy: "\n").filter { !$0.isEmpty }
-        var messages: [SessionMessage] = []
-
-        for line in lines {
-            guard let lineData = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
-                continue
-            }
-
-            guard let type = obj["type"] as? String else { continue }
-
-            if type == "message" {
-                if let msg = parseMessage(obj) {
-                    messages.append(msg)
-                }
-            }
+        // Process any remaining data in buffer
+        if !buffer.isEmpty,
+           let obj = try? JSONSerialization.jsonObject(with: buffer) as? [String: Any],
+           let type = obj["type"] as? String,
+           type == "message",
+           let msg = parseMessage(obj) {
+            messages.append(msg)
         }
 
         // Return last N messages
