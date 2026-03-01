@@ -47,7 +47,11 @@ final class TranscriptStore: ObservableObject {
     }
 
     func appendAssistantDelta(_ delta: String) {
-        guard isAccumulating else { return }
+        if !isAccumulating {
+            // Text arrived after a steer or unexpected finalization —
+            // auto-start a new assistant message to capture it.
+            beginAssistantMessage()
+        }
         currentAssistantText += delta
         // Update the last message in place
         if let lastIndex = messages.indices.last, messages[lastIndex].role == .assistant {
