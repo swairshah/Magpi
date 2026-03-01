@@ -55,6 +55,9 @@ enum DaemonClient {
             return parts.joined(separator: "/")
         }
 
+        /// Whether this process is orphaned (parent is launchd/init, pid 1)
+        var isOrphaned: Bool { ppid == 1 }
+
         /// A distinguishing label for agents in the same cwd.
         /// Uses mux session name or TTY to tell them apart.
         var disambiguationLabel: String? {

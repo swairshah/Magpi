@@ -18,6 +18,8 @@ final class AgentStore: ObservableObject {
         let terminalApp: String?
         /// TTY or mux session name for disambiguation
         let disambiguationLabel: String?
+        /// Process parent is launchd (pid 1) — likely a leaked/orphaned process
+        let isOrphaned: Bool
 
         // From pi-report
         var lastStatusType: String?
@@ -254,6 +256,7 @@ final class AgentStore: ObservableObject {
                 muxSession: agent.muxSession,
                 terminalApp: agent.terminalApp,
                 disambiguationLabel: agent.disambiguationLabel,
+                isOrphaned: agent.isOrphaned,
                 sessionTitle: titles[agent.pid] ?? nil
             )
 
@@ -268,8 +271,9 @@ final class AgentStore: ObservableObject {
             merged.append(info)
         }
 
-        // Sort: running first, then waiting, then by project name
+        // Sort: orphaned last, then running first, then waiting, then by project name
         merged.sort { a, b in
+            if a.isOrphaned != b.isOrphaned { return !a.isOrphaned }
             let aOrder = activityOrder(a.activity)
             let bOrder = activityOrder(b.activity)
             if aOrder != bOrder { return aOrder < bOrder }

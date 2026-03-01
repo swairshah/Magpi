@@ -25,7 +25,12 @@ enum SessionReader {
 
     /// Find the session file for a specific PID in a given working directory.
     /// Uses the process start time to match against session file timestamps.
-    /// Falls back to the latest session file if PID matching fails.
+    ///
+    /// When Pi uses `--continue`, it resumes an existing session file rather than
+    /// creating a new one. In that case the process start time won't match any file.
+    /// We fall back to finding the most recently *modified* file that was modified
+    /// after the process started (meaning the process is likely writing to it).
+    /// Returns nil if no reasonable match is found.
     static func sessionFile(cwd: String, pid: Int32) -> URL? {
         let dirName = cwdToSessionDirName(cwd)
         let sessionsDir = (NSHomeDirectory() as NSString)
@@ -40,14 +45,13 @@ enum SessionReader {
         let jsonlFiles = files.filter { $0.hasSuffix(".jsonl") }
         guard !jsonlFiles.isEmpty else { return nil }
 
-        // Try to match by process start time
+        let sessionDir = URL(fileURLWithPath: sessionsDir)
+
+        // Strategy 1: Match by process start time (new sessions create a file at start)
         if let processStart = getProcessStartTime(pid: pid) {
-            let sessionDir = URL(fileURLWithPath: sessionsDir)
             var bestMatch: (file: String, delta: TimeInterval)?
 
             for file in jsonlFiles {
-                // Session filenames: 2026-02-28T08-43-01-970Z_UUID.jsonl
-                // Extract the ISO timestamp portion before the underscore
                 if let sessionDate = parseSessionFilenameDate(file) {
                     let delta = abs(sessionDate.timeIntervalSince(processStart))
                     if bestMatch == nil || delta < bestMatch!.delta {
@@ -56,15 +60,31 @@ enum SessionReader {
                 }
             }
 
-            // Accept if within 5 seconds (process start vs session create are very close)
+            // Accept if within 5 seconds
             if let match = bestMatch, match.delta < 5.0 {
                 return sessionDir.appendingPathComponent(match.file)
             }
+
+            // Strategy 2: For --continue sessions, find the file most recently modified
+            // AFTER the process started. This is the file the process is writing to.
+            var candidates: [(file: String, mtime: Date)] = []
+            for file in jsonlFiles {
+                let url = sessionDir.appendingPathComponent(file)
+                if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+                   let mtime = attrs[.modificationDate] as? Date,
+                   mtime > processStart {
+                    candidates.append((file, mtime))
+                }
+            }
+
+            // Pick the most recently modified
+            if let best = candidates.max(by: { $0.mtime < $1.mtime }) {
+                return sessionDir.appendingPathComponent(best.file)
+            }
         }
 
-        // Fallback: return the latest session file
-        let sorted = jsonlFiles.sorted(by: >)
-        return URL(fileURLWithPath: sessionsDir).appendingPathComponent(sorted[0])
+        // No match at all — return nil rather than a wrong session
+        return nil
     }
 
     /// Find the latest session file for a given working directory (no PID matching).

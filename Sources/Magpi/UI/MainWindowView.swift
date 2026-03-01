@@ -359,6 +359,11 @@ struct SidebarAgentRow: View {
                     .font(.subheadline.weight(.medium))
                     .lineLimit(1)
                 Spacer()
+                if agent.isOrphaned {
+                    Text("orphan")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                }
                 Text("PID \(agent.pid)")
                     .font(.caption2.monospaced())
                     .foregroundStyle(.tertiary)
@@ -411,6 +416,7 @@ struct SidebarAgentRow: View {
             }
         }
         .padding(8)
+        .opacity(agent.isOrphaned ? 0.5 : 1.0)
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(0.06))
