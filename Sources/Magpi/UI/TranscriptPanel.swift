@@ -266,9 +266,9 @@ struct MessageBubble: View {
 
     private var backgroundColor: Color {
         switch message.role {
-        case .user: return Color.blue.opacity(0.08)
-        case .assistant: return Color.green.opacity(0.06)
-        case .system: return Color.orange.opacity(0.06)
+        case .user: return Color(white: 0.5).opacity(0.12)
+        case .assistant: return Color(white: 0.5).opacity(0.06)
+        case .system: return Color(white: 0.5).opacity(0.04)
         }
     }
 

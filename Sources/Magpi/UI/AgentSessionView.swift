@@ -305,9 +305,9 @@ struct AgentSessionView: View {
 
     private func roleBackground(_ role: SessionReader.SessionMessage.Role) -> Color {
         switch role {
-        case .user: return Color.blue.opacity(0.06)
-        case .assistant: return Color.green.opacity(0.04)
-        case .system: return Color.orange.opacity(0.04)
+        case .user: return Color(white: 0.5).opacity(0.12)
+        case .assistant: return Color(white: 0.5).opacity(0.06)
+        case .system: return Color(white: 0.5).opacity(0.04)
         }
     }
 
