@@ -310,11 +310,14 @@ final class ConversationLoop: ObservableObject {
         switch event {
         case .agentStart:
             transcript.beginAssistantMessage()
-            transcript.addLog("Agent started processing")
+            transcript.addLog("⚡ Agent processing...")
 
         case .agentEnd:
+            // Log full assistant response before finalizing
+            if let last = transcript.messages.last, last.role == .assistant {
+                transcript.logTurn(role: "ASSISTANT", text: last.text)
+            }
             transcript.endAssistantMessage()
-            transcript.addLog("Agent finished")
             // If we're still waiting and nothing was queued to speak,
             // go back to idle (the response might have had no voice tags)
             if state == .waiting {
@@ -330,14 +333,14 @@ final class ConversationLoop: ObservableObject {
         case .textDelta(let text):
             transcript.appendAssistantDelta(text)
 
-        case .textEnd(let fullText):
-            transcript.addLog("Text block complete (\(fullText.count) chars)")
+        case .textEnd(_):
+            break  // Full text logged at agentEnd
 
-        case .toolStart(let name, _):
-            transcript.addLog("Tool: \(name)")
+        case .toolStart(let name, let id):
+            transcript.addLog("🔧 Tool call: \(name) (\(id))")
 
         case .toolEnd(let name, _):
-            transcript.addLog("Tool done: \(name)")
+            transcript.addLog("🔧 Tool done: \(name)")
 
         case .response(let command, let success, let error):
             if !success {
@@ -579,14 +582,12 @@ final class ConversationLoop: ObservableObject {
                 return
             }
 
-            transcript.addLog("Transcribed: \"\(text.prefix(120))\"")
-
-            // Add to transcript
+            // Add to transcript + log full turn
             transcript.addUserMessage(text)
+            transcript.logTurn(role: "USER", text: text)
 
             // Send to Pi conversation agent via RPC
             print("Magpi: Sending to Pi: \"\(text.prefix(80))\"")
-            transcript.addLog("Sending: \"\(text.prefix(120))\"")
 
             if piRPC.isRunning {
                 if piRPC.isStreaming {
@@ -603,7 +604,7 @@ final class ConversationLoop: ObservableObject {
 
             state = .waiting
             print("Magpi: → WAITING")
-            transcript.addLog("→ Waiting for response...")
+            transcript.addLog("⏳ Waiting for response...")
 
             // Timeout
             Task {
@@ -662,6 +663,7 @@ final class ConversationLoop: ObservableObject {
         state = .speaking
         bargeInChunkCount = 0
         print("Magpi: → SPEAKING: \"\(item.text.prefix(60))\"")
+        transcript.addLog("🔊 Speaking: \"\(item.text)\"")
 
         do {
             let audioData = try await ttsEngine.synthesize(text: item.text, voice: item.voice)

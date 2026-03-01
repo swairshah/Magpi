@@ -75,9 +75,31 @@ final class TranscriptStore: ObservableObject {
     func addLog(_ text: String) {
         let timestamp = DateFormatter.logFormatter.string(from: Date())
         logs.append("[\(timestamp)] \(text)")
-        // Keep last 500 log lines
-        if logs.count > 500 {
-            logs.removeFirst(logs.count - 500)
+        trimLogs()
+    }
+
+    /// Log a full transcript turn with role prefix and separator
+    func logTurn(role: String, text: String) {
+        let timestamp = DateFormatter.logFormatter.string(from: Date())
+        let cleaned = text
+            .replacingOccurrences(of: "<voice>", with: "")
+            .replacingOccurrences(of: "</voice>", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        logs.append("[\(timestamp)] ── \(role) ──")
+        // Split into lines for readability but keep as single entries
+        for line in cleaned.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty {
+                logs.append("  \(trimmed)")
+            }
+        }
+        logs.append("")  // blank line after turn
+        trimLogs()
+    }
+
+    private func trimLogs() {
+        if logs.count > 1000 {
+            logs.removeFirst(logs.count - 1000)
         }
     }
 
