@@ -364,6 +364,14 @@ struct SidebarAgentRow: View {
                     .foregroundStyle(.tertiary)
             }
 
+            // Session title (first user message) — like Graphone
+            if let title = agent.sessionTitle {
+                Text(title)
+                    .font(.caption)
+                    .foregroundColor(.primary.opacity(0.7))
+                    .lineLimit(1)
+            }
+
             if let summary = agent.lastStatusSummary {
                 Text(summary)
                     .font(.caption)
@@ -380,6 +388,14 @@ struct SidebarAgentRow: View {
                     Text(Self.relativeDateFormatter.localizedString(for: time, relativeTo: Date()))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
+                }
+
+                // Show terminal/mux info for disambiguation
+                if let label = agent.disambiguationLabel {
+                    Text(label)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                 }
 
                 Spacer()

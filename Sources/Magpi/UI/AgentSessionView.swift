@@ -241,11 +241,13 @@ struct AgentSessionView: View {
 
     private func loadMessages() {
         isLoading = true
+        let pid = agent.pid
         DispatchQueue.global(qos: .userInteractive).async {
             let cwd = agent.cwd
             let msgs: [SessionReader.SessionMessage]
 
-            if let sessionURL = SessionReader.latestSessionFile(cwd: cwd) {
+            // Use PID-based matching to find this agent's specific session file
+            if let sessionURL = SessionReader.sessionFile(cwd: cwd, pid: pid) {
                 msgs = SessionReader.readMessages(from: sessionURL, maxMessages: 80)
             } else {
                 msgs = []

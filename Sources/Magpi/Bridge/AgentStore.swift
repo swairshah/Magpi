@@ -16,13 +16,26 @@ final class AgentStore: ObservableObject {
         let mux: String?
         let muxSession: String?
         let terminalApp: String?
+        /// TTY or mux session name for disambiguation
+        let disambiguationLabel: String?
 
         // From pi-report
         var lastStatusType: String?
         var lastStatusSummary: String?
         var lastStatusTime: Date?
 
+        // From session file — first user message as a label
+        var sessionTitle: String?
+
         var id: Int32 { pid }
+
+        /// Display name: project name + disambiguation if needed
+        var displayName: String {
+            if let title = sessionTitle, !title.isEmpty {
+                return title
+            }
+            return projectName
+        }
 
         var activityColor: String {
             switch activity {
@@ -172,6 +185,9 @@ final class AgentStore: ObservableObject {
         for agent in statusd {
             let report = reports[agent.pid]
 
+            // Read the first user message from the session file as a title
+            let sessionTitle = Self.readSessionTitle(cwd: agent.cwd ?? "", pid: agent.pid)
+
             var info = AgentInfo(
                 pid: agent.pid,
                 cwd: agent.cwd ?? "unknown",
@@ -180,7 +196,9 @@ final class AgentStore: ObservableObject {
                 model: nil,
                 mux: agent.mux,
                 muxSession: agent.muxSession,
-                terminalApp: agent.terminalApp
+                terminalApp: agent.terminalApp,
+                disambiguationLabel: agent.disambiguationLabel,
+                sessionTitle: sessionTitle
             )
 
             if let report = report {
@@ -209,6 +227,51 @@ final class AgentStore: ObservableObject {
             waitingInput: merged.filter { $0.activity == "waiting_input" }.count,
             unknown: merged.filter { $0.activity != "running" && $0.activity != "waiting_input" }.count
         )
+    }
+
+    /// Read the first user message from a session file as a display title.
+    private static func readSessionTitle(cwd: String, pid: Int32) -> String? {
+        guard !cwd.isEmpty, cwd != "unknown" else { return nil }
+
+        guard let url = SessionReader.sessionFile(cwd: cwd, pid: pid) else { return nil }
+
+        // Only read enough of the file to find the first user message
+        guard let data = try? Data(contentsOf: url),
+              let content = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+
+        for line in content.components(separatedBy: "\n") where !line.isEmpty {
+            guard let lineData = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                  let type = obj["type"] as? String,
+                  type == "message",
+                  let message = obj["message"] as? [String: Any],
+                  let role = message["role"] as? String,
+                  role == "user",
+                  let content = message["content"] as? [[String: Any]] else {
+                continue
+            }
+
+            // Get first text block
+            for block in content {
+                if let blockType = block["type"] as? String,
+                   blockType == "text",
+                   let text = block["text"] as? String {
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        // Truncate long messages
+                        let maxLen = 50
+                        if trimmed.count > maxLen {
+                            return String(trimmed.prefix(maxLen)) + "…"
+                        }
+                        return trimmed
+                    }
+                }
+            }
+        }
+
+        return nil
     }
 
     private func activityOrder(_ activity: String) -> Int {

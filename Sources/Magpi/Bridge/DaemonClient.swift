@@ -49,9 +49,21 @@ enum DaemonClient {
         var projectName: String {
             guard let cwd = cwd else { return "unknown" }
             let home = NSHomeDirectory()
+            if cwd == home { return "~" }
             let display = cwd.hasPrefix(home) ? "~" + cwd.dropFirst(home.count) : cwd
             let parts = display.split(separator: "/").suffix(2)
             return parts.joined(separator: "/")
+        }
+
+        /// A distinguishing label for agents in the same cwd.
+        /// Uses mux session name or TTY to tell them apart.
+        var disambiguationLabel: String? {
+            if let muxSession = muxSession, !muxSession.isEmpty {
+                return muxSession
+            }
+            // Extract last portion of tty (e.g. "ttys005" from "/dev/ttys005")
+            let ttyPart = tty.split(separator: "/").last.map(String.init) ?? tty
+            return ttyPart.isEmpty ? nil : ttyPart
         }
     }
 

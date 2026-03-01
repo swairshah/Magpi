@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Reads Pi agent session JSONL files to extract conversation history.
 enum SessionReader {
@@ -22,7 +23,51 @@ enum SessionReader {
         let resultPreview: String?
     }
 
-    /// Find the latest session file for a given working directory.
+    /// Find the session file for a specific PID in a given working directory.
+    /// Uses the process start time to match against session file timestamps.
+    /// Falls back to the latest session file if PID matching fails.
+    static func sessionFile(cwd: String, pid: Int32) -> URL? {
+        let dirName = cwdToSessionDirName(cwd)
+        let sessionsDir = (NSHomeDirectory() as NSString)
+            .appendingPathComponent(".pi/agent/sessions/\(dirName)")
+
+        guard FileManager.default.fileExists(atPath: sessionsDir) else { return nil }
+
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: sessionsDir) else {
+            return nil
+        }
+
+        let jsonlFiles = files.filter { $0.hasSuffix(".jsonl") }
+        guard !jsonlFiles.isEmpty else { return nil }
+
+        // Try to match by process start time
+        if let processStart = getProcessStartTime(pid: pid) {
+            let sessionDir = URL(fileURLWithPath: sessionsDir)
+            var bestMatch: (file: String, delta: TimeInterval)?
+
+            for file in jsonlFiles {
+                // Session filenames: 2026-02-28T08-43-01-970Z_UUID.jsonl
+                // Extract the ISO timestamp portion before the underscore
+                if let sessionDate = parseSessionFilenameDate(file) {
+                    let delta = abs(sessionDate.timeIntervalSince(processStart))
+                    if bestMatch == nil || delta < bestMatch!.delta {
+                        bestMatch = (file, delta)
+                    }
+                }
+            }
+
+            // Accept if within 5 seconds (process start vs session create are very close)
+            if let match = bestMatch, match.delta < 5.0 {
+                return sessionDir.appendingPathComponent(match.file)
+            }
+        }
+
+        // Fallback: return the latest session file
+        let sorted = jsonlFiles.sorted(by: >)
+        return URL(fileURLWithPath: sessionsDir).appendingPathComponent(sorted[0])
+    }
+
+    /// Find the latest session file for a given working directory (no PID matching).
     static func latestSessionFile(cwd: String) -> URL? {
         let dirName = cwdToSessionDirName(cwd)
         let sessionsDir = (NSHomeDirectory() as NSString)
@@ -34,7 +79,6 @@ enum SessionReader {
             return nil
         }
 
-        // Session files are named with ISO timestamps, sort descending for latest
         let jsonlFiles = files
             .filter { $0.hasSuffix(".jsonl") }
             .sorted(by: >)
@@ -76,7 +120,55 @@ enum SessionReader {
         return messages
     }
 
+    // MARK: - Process Start Time
+
+    /// Get the start time of a process using sysctl.
+    static func getProcessStartTime(pid: Int32) -> Date? {
+        var mib = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+
+        let result = sysctl(&mib, UInt32(mib.count), &info, &size, nil, 0)
+        guard result == 0 else { return nil }
+
+        let startTime = info.kp_proc.p_starttime
+        return Date(timeIntervalSince1970: Double(startTime.tv_sec) + Double(startTime.tv_usec) / 1_000_000)
+    }
+
     // MARK: - Private
+
+    /// Parse the date from a session filename.
+    /// Format: "2026-02-28T08-43-01-970Z_UUID.jsonl"
+    private static func parseSessionFilenameDate(_ filename: String) -> Date? {
+        // Extract timestamp portion before the UUID
+        guard let underscoreIndex = filename.firstIndex(of: "_") else { return nil }
+        var tsStr = String(filename[filename.startIndex..<underscoreIndex])
+
+        // Convert from filename format "2026-02-28T08-43-01-970Z" to ISO8601 "2026-02-28T08:43:01.970Z"
+        // The hours-minutes-seconds use dashes instead of colons (filesystem safe)
+        // And the fractional seconds use a dash instead of a dot
+        guard tsStr.hasSuffix("Z") else { return nil }
+        tsStr.removeLast() // Remove Z
+
+        let parts = tsStr.split(separator: "T")
+        guard parts.count == 2 else { return nil }
+
+        let datePart = parts[0] // "2026-02-28"
+        let timePart = parts[1] // "08-43-01-970"
+        let timeComponents = timePart.split(separator: "-")
+        guard timeComponents.count >= 3 else { return nil }
+
+        let hours = timeComponents[0]
+        let minutes = timeComponents[1]
+        let seconds = timeComponents[2]
+        let millis = timeComponents.count > 3 ? timeComponents[3] : "000"
+
+        let isoString = "\(datePart)T\(hours):\(minutes):\(seconds).\(millis)Z"
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: isoString)
+    }
 
     private static func parseMessage(_ obj: [String: Any]) -> SessionMessage? {
         guard let message = obj["message"] as? [String: Any],
