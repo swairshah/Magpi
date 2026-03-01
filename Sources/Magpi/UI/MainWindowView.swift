@@ -7,6 +7,8 @@ struct MainWindowView: View {
     @ObservedObject var agentStore: AgentStore
     @State private var selectedTab: Tab = .agents
     @State private var sidebarCollapsed = false
+    /// nil = show Magpi manager conversation, otherwise show spoke agent's session
+    @State private var selectedAgentPid: Int32? = nil
 
     enum Tab: String, CaseIterable {
         case agents = "Agents"
@@ -206,8 +208,40 @@ struct MainWindowView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 4) {
+                        // Magpi manager row
+                        Button {
+                            selectedAgentPid = nil
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "bird.fill")
+                                    .font(.caption)
+                                    .foregroundColor(.accentColor)
+                                Text("Magpi Manager")
+                                    .font(.subheadline.weight(.medium))
+                                Spacer()
+                            }
+                            .padding(8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(selectedAgentPid == nil ? Color.accentColor.opacity(0.12) : Color.clear)
+                            )
+                        }
+                        .buttonStyle(.plain)
+
+                        Divider().padding(.vertical, 2)
+
+                        // Spoke agents
                         ForEach(agentStore.agents) { agent in
-                            SidebarAgentRow(agent: agent, agentStore: agentStore)
+                            Button {
+                                selectedAgentPid = agent.pid
+                            } label: {
+                                SidebarAgentRow(
+                                    agent: agent,
+                                    agentStore: agentStore,
+                                    isSelected: selectedAgentPid == agent.pid
+                                )
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                     .padding(8)
@@ -277,22 +311,28 @@ struct MainWindowView: View {
 
     // MARK: - Detail (Conversation)
 
+    @ViewBuilder
     private var detail: some View {
-        ConversationView(
-            store: conversationLoop.transcript,
-            onSend: { text in
-                conversationLoop.transcript.addUserMessage(text)
-                conversationLoop.transcript.logTurn(role: "USER (typed)", text: text)
-                if conversationLoop.piRPC.isRunning {
-                    if conversationLoop.piRPC.isStreaming {
-                        conversationLoop.piRPC.followUp(text)
-                        conversationLoop.transcript.addLog("📬 Queued as follow-up (agent busy)")
-                    } else {
-                        conversationLoop.piRPC.sendPrompt(text)
+        if let pid = selectedAgentPid,
+           let agent = agentStore.agents.first(where: { $0.pid == pid }) {
+            AgentSessionView(agent: agent, agentStore: agentStore)
+        } else {
+            ConversationView(
+                store: conversationLoop.transcript,
+                onSend: { text in
+                    conversationLoop.transcript.addUserMessage(text)
+                    conversationLoop.transcript.logTurn(role: "USER (typed)", text: text)
+                    if conversationLoop.piRPC.isRunning {
+                        if conversationLoop.piRPC.isStreaming {
+                            conversationLoop.piRPC.followUp(text)
+                            conversationLoop.transcript.addLog("📬 Queued as follow-up (agent busy)")
+                        } else {
+                            conversationLoop.piRPC.sendPrompt(text)
+                        }
                     }
                 }
-            }
-        )
+            )
+        }
     }
 }
 
@@ -301,6 +341,7 @@ struct MainWindowView: View {
 struct SidebarAgentRow: View {
     let agent: AgentStore.AgentInfo
     let agentStore: AgentStore
+    var isSelected: Bool = false
 
     private static let relativeDateFormatter: RelativeDateTimeFormatter = {
         let f = RelativeDateTimeFormatter()
@@ -354,7 +395,14 @@ struct SidebarAgentRow: View {
             }
         }
         .padding(8)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.06)))
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(isSelected ? Color.accentColor.opacity(0.4) : Color.clear, lineWidth: 1)
+        )
     }
 
     private var activityColor: Color {
