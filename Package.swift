@@ -26,7 +26,9 @@ let package = Package(
             name: "Magpi",
             dependencies: ["COnnxRuntime"],
             path: "Sources/Magpi",
-
+            resources: [
+                .copy("Resources"),
+            ],
             linkerSettings: [
                 .unsafeFlags([
                     "-L", "vendor/onnxruntime/lib",

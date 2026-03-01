@@ -63,7 +63,7 @@ final class ConversationLoop: ObservableObject {
     private var transcriber: Transcriber?
     private let ttsEngine = TTSEngine()
     private let piBridge = PiBridge()
-    private let piRPC = PiRPCClient()
+    let piRPC = PiRPCClient()
 
     // Transcript for UI
     let transcript = TranscriptStore()

@@ -56,7 +56,17 @@ final class StatusBarController {
         toggleItem.target = self
         menu.addItem(toggleItem)
         
-        // Transcript panel
+        // Show main window
+        let windowItem = NSMenuItem(
+            title: "Show Window",
+            action: #selector(showWindow),
+            keyEquivalent: "1"
+        )
+        windowItem.keyEquivalentModifierMask = [.command]
+        windowItem.target = self
+        menu.addItem(windowItem)
+
+        // Floating transcript panel
         let transcriptVisible = transcriptPanel?.isVisible ?? false
         let transcriptItem = NSMenuItem(
             title: transcriptVisible ? "Hide Transcript" : "Show Transcript",
@@ -166,28 +176,52 @@ final class StatusBarController {
     
     private func updateIcon(for state: ConversationLoop.State) {
         guard let button = statusItem?.button else { return }
-        
-        let symbolName: String
+
+        let imageName: String
         switch state {
         case .idle:
-            symbolName = "bird"
+            imageName = "menubar_normal"
         case .listening:
-            symbolName = "mic.fill"
-        case .turnCheck, .transcribing:
-            symbolName = "brain.head.profile"
-        case .waiting:
-            symbolName = "ellipsis.circle"
+            imageName = "menubar_normal"   // normal bird while listening
+        case .turnCheck, .transcribing, .waiting:
+            imageName = "menubar_thinking" // thought bubble
         case .speaking:
-            symbolName = "speaker.wave.2.fill"
+            imageName = "menubar_saying"   // sound waves
         case .error:
-            symbolName = "exclamationmark.triangle"
+            imageName = "menubar_normal"
         }
-        
-        button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: state.displayName)
+
+        if let image = loadMenuBarImage(named: imageName) {
+            image.isTemplate = true  // Adapts to light/dark menu bar
+            button.image = image
+        } else {
+            // Fallback to SF Symbol
+            button.image = NSImage(systemSymbolName: "bird", accessibilityDescription: state.displayName)
+        }
+    }
+
+    private func loadMenuBarImage(named name: String) -> NSImage? {
+        // Try @2x first for retina displays
+        if let url2x = Bundle.module.url(forResource: name + "@2x", withExtension: "png", subdirectory: "Resources"),
+           let image = NSImage(contentsOf: url2x) {
+            image.size = NSSize(width: 18, height: 18)
+            return image
+        }
+        // Fallback to 1x
+        if let url = Bundle.module.url(forResource: name, withExtension: "png", subdirectory: "Resources"),
+           let image = NSImage(contentsOf: url) {
+            image.size = NSSize(width: 18, height: 18)
+            return image
+        }
+        return nil
     }
     
     // MARK: - Actions
     
+    @objc private func showWindow() {
+        onShowSettings?()
+    }
+
     @objc private func toggleTranscript() {
         transcriptPanel?.togglePanel()
     }
