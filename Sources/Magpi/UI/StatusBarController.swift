@@ -15,10 +15,15 @@ final class StatusBarController {
     
     private weak var conversationLoop: ConversationLoop?
     private var transcriptPanel: TranscriptPanelController?
+    let agentStore = AgentStore()
     
     init(conversationLoop: ConversationLoop) {
         self.conversationLoop = conversationLoop
-        self.transcriptPanel = TranscriptPanelController(store: conversationLoop.transcript)
+        self.transcriptPanel = TranscriptPanelController(
+            store: conversationLoop.transcript,
+            agentStore: agentStore
+        )
+        agentStore.start()
         setupMenuBar()
         observeState()
     }
@@ -103,12 +108,22 @@ final class StatusBarController {
         // Agent status
         let agentRunning = conversationLoop?.isAgentRunning ?? false
         let agentStatus = NSMenuItem(
-            title: "Pi Agent: \(agentRunning ? "Running ✓" : "Not running ✗")",
+            title: "Manager: \(agentRunning ? "Running ✓" : "Not running ✗")",
             action: nil,
             keyEquivalent: ""
         )
         agentStatus.isEnabled = false
         menu.addItem(agentStatus)
+
+        // Spoke agents
+        let s = agentStore.summary
+        let spokeStatus = NSMenuItem(
+            title: "Agents: \(s.total) (\(s.running) running, \(s.waitingInput) waiting)",
+            action: nil,
+            keyEquivalent: ""
+        )
+        spokeStatus.isEnabled = false
+        menu.addItem(spokeStatus)
 
         // Model status
         let models = ModelManager.shared
@@ -137,6 +152,13 @@ final class StatusBarController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] state in
                 self?.updateIcon(for: state)
+                self?.rebuildMenu()
+            }
+            .store(in: &cancellables)
+
+        agentStore.$summary
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
                 self?.rebuildMenu()
             }
             .store(in: &cancellables)

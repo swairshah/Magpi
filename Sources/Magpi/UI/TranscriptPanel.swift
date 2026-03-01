@@ -1,15 +1,40 @@
 import SwiftUI
 import AppKit
 
-/// Floating panel showing the conversation transcript between user and Pi manager.
+/// Floating panel showing agent dashboard, conversation transcript, and logs.
 struct TranscriptPanel: View {
     @ObservedObject var store: TranscriptStore
-    @State private var showingLogs = false
+    @ObservedObject var agentStore: AgentStore
+    @State private var selectedTab = 0  // 0 = Agents, 1 = Chat, 2 = Logs
     @State private var autoScroll = true
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
+            // Header with tabs
+            header
+                .background(.bar)
+
+            Divider()
+
+            // Tab content
+            switch selectedTab {
+            case 0:
+                AgentListView(agentStore: agentStore)
+            case 1:
+                transcriptView
+            case 2:
+                logView
+            default:
+                transcriptView
+            }
+        }
+        .frame(minWidth: 360, idealWidth: 420, minHeight: 300, idealHeight: 500)
+    }
+
+    // MARK: - Header
+
+    private var header: some View {
+        VStack(spacing: 0) {
             HStack {
                 Image(systemName: "bird")
                     .foregroundColor(.accentColor)
@@ -18,36 +43,59 @@ struct TranscriptPanel: View {
 
                 Spacer()
 
-                // Verbose toggle
-                Toggle(isOn: $store.verboseLogging) {
-                    Image(systemName: "text.magnifyingglass")
+                // Verbose toggle (only shown in logs)
+                if selectedTab == 2 {
+                    Toggle(isOn: $store.verboseLogging) {
+                        Image(systemName: "text.magnifyingglass")
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .help("Verbose logging")
                 }
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .help("Verbose logging")
-
-                // Log toggle
-                Button {
-                    showingLogs.toggle()
-                } label: {
-                    Image(systemName: showingLogs ? "text.bubble.fill" : "list.bullet")
-                }
-                .buttonStyle(.borderless)
-                .help(showingLogs ? "Show transcript" : "Show logs")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(.bar)
 
-            Divider()
-
-            if showingLogs {
-                logView
-            } else {
-                transcriptView
+            // Tab bar
+            HStack(spacing: 0) {
+                tabButton("Agents", icon: "terminal", index: 0, badge: agentStore.summary.total)
+                tabButton("Chat", icon: "text.bubble", index: 1, badge: store.messages.count)
+                tabButton("Logs", icon: "list.bullet", index: 2, badge: nil)
             }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 4)
         }
-        .frame(minWidth: 360, idealWidth: 420, minHeight: 300, idealHeight: 500)
+    }
+
+    private func tabButton(_ title: String, icon: String, index: Int, badge: Int?) -> some View {
+        Button {
+            selectedTab = index
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.caption)
+                Text(title)
+                    .font(.caption.weight(.medium))
+                if let badge = badge, badge > 0 {
+                    Text("\(badge)")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(
+                            Capsule().fill(selectedTab == index ? Color.accentColor : Color.secondary)
+                        )
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(selectedTab == index ? Color.accentColor.opacity(0.15) : Color.clear)
+            )
+            .foregroundColor(selectedTab == index ? .accentColor : .secondary)
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Transcript View
@@ -147,7 +195,6 @@ struct MessageBubble: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            // Role icon
             Image(systemName: iconName)
                 .foregroundColor(iconColor)
                 .font(.caption)
@@ -155,7 +202,6 @@ struct MessageBubble: View {
                 .padding(.top, 2)
 
             VStack(alignment: .leading, spacing: 2) {
-                // Role label + timestamp
                 HStack(spacing: 4) {
                     Text(roleLabel)
                         .font(.caption2)
@@ -167,7 +213,6 @@ struct MessageBubble: View {
                         .foregroundColor(.secondary.opacity(0.6))
                 }
 
-                // Message text
                 Text(displayText)
                     .textSelection(.enabled)
                     .font(.body)
@@ -228,7 +273,6 @@ struct MessageBubble: View {
     }
 
     private var displayText: String {
-        // Strip <voice> tags for display — show the raw text content
         message.text
             .replacingOccurrences(of: "<voice>", with: "")
             .replacingOccurrences(of: "</voice>", with: "")
@@ -248,9 +292,11 @@ struct MessageBubble: View {
 final class TranscriptPanelController {
     private var window: NSWindow?
     private let store: TranscriptStore
+    private let agentStore: AgentStore
 
-    init(store: TranscriptStore) {
+    init(store: TranscriptStore, agentStore: AgentStore) {
         self.store = store
+        self.agentStore = agentStore
     }
 
     func showPanel() {
@@ -266,12 +312,14 @@ final class TranscriptPanelController {
             backing: .buffered,
             defer: false
         )
-        panel.title = "Magpi Transcript"
+        panel.title = "Magpi Dashboard"
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.level = .floating
-        panel.contentView = NSHostingView(rootView: TranscriptPanel(store: store))
+        panel.contentView = NSHostingView(
+            rootView: TranscriptPanel(store: store, agentStore: agentStore)
+        )
 
         // Position in top-right corner
         if let screen = NSScreen.main {
