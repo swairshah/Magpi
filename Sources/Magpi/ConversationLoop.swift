@@ -591,9 +591,10 @@ final class ConversationLoop: ObservableObject {
 
             if piRPC.isRunning {
                 if piRPC.isStreaming {
-                    // Agent is busy — queue as follow-up (delivered after current task)
-                    piRPC.followUp(text)
-                    transcript.addLog("📬 Queued as follow-up (agent busy)")
+                    // Agent is busy — steer with the new message so it arrives immediately.
+                    // The agent can then decide to stop or continue based on content.
+                    piRPC.steer(text)
+                    transcript.addLog("↪ Steered agent with new input")
                 } else {
                     piRPC.sendPrompt(text)
                 }

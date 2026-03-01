@@ -30,11 +30,17 @@ final class TranscriptStore: ObservableObject {
     private var isAccumulating = false
 
     func addUserMessage(_ text: String) {
+        // Finalize any incomplete assistant message first
+        if isAccumulating { endAssistantMessage() }
         messages.append(Message(role: .user, text: text, isComplete: true))
         trimIfNeeded()
     }
 
     func beginAssistantMessage() {
+        // Auto-finalize any previous incomplete message
+        if isAccumulating {
+            endAssistantMessage()
+        }
         currentAssistantText = ""
         isAccumulating = true
         messages.append(Message(role: .assistant, text: "", isComplete: false))

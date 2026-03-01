@@ -324,8 +324,8 @@ struct MainWindowView: View {
                     conversationLoop.transcript.logTurn(role: "USER (typed)", text: text)
                     if conversationLoop.piRPC.isRunning {
                         if conversationLoop.piRPC.isStreaming {
-                            conversationLoop.piRPC.followUp(text)
-                            conversationLoop.transcript.addLog("📬 Queued as follow-up (agent busy)")
+                            conversationLoop.piRPC.steer(text)
+                            conversationLoop.transcript.addLog("↪ Steered agent with new input")
                         } else {
                             conversationLoop.piRPC.sendPrompt(text)
                         }

@@ -44,10 +44,14 @@ enum DaemonClient {
 
         var id: Int32 { pid }
 
-        /// Extract project name from cwd (last path component)
+        /// Extract project name from cwd.
+        /// Shows last 2 path components for disambiguation (e.g. "work/projects")
         var projectName: String {
             guard let cwd = cwd else { return "unknown" }
-            return URL(fileURLWithPath: cwd).lastPathComponent
+            let home = NSHomeDirectory()
+            let display = cwd.hasPrefix(home) ? "~" + cwd.dropFirst(home.count) : cwd
+            let parts = display.split(separator: "/").suffix(2)
+            return parts.joined(separator: "/")
         }
     }
 
