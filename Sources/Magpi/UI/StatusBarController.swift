@@ -201,16 +201,19 @@ final class StatusBarController {
     }
 
     private func loadMenuBarImage(named name: String) -> NSImage? {
-        // Try @2x first for retina displays
+        // Load @2x image and set point size to half pixel size
+        // This gives crisp rendering on retina displays
         if let url2x = Bundle.module.url(forResource: name + "@2x", withExtension: "png", subdirectory: "Resources"),
            let image = NSImage(contentsOf: url2x) {
-            image.size = NSSize(width: 18, height: 18)
+            // Point size = pixel size / 2
+            let pointW = CGFloat(image.representations.first?.pixelsWide ?? Int(image.size.width)) / 2.0
+            let pointH = CGFloat(image.representations.first?.pixelsHigh ?? Int(image.size.height)) / 2.0
+            image.size = NSSize(width: pointW, height: pointH)
             return image
         }
         // Fallback to 1x
         if let url = Bundle.module.url(forResource: name, withExtension: "png", subdirectory: "Resources"),
            let image = NSImage(contentsOf: url) {
-            image.size = NSSize(width: 18, height: 18)
             return image
         }
         return nil

@@ -134,18 +134,20 @@ struct MainWindowView: View {
 
     @ViewBuilder
     private var stateIcon: some View {
-        let imageName: String = {
+        // Use the full-res 1024px source images for the sidebar (sharp at any size)
+        let srcName: String = {
             switch conversationLoop.state {
-            case .speaking: return "menubar_saying"
-            case .turnCheck, .transcribing, .waiting: return "menubar_thinking"
-            default: return "menubar_normal"
+            case .speaking: return "magpi_saying_1024"
+            case .turnCheck, .transcribing, .waiting: return "magpi_thinking_1024"
+            default: return "magpi_normal_1024"
             }
         }()
 
-        if let url = Bundle.module.url(forResource: imageName + "@2x", withExtension: "png", subdirectory: "Resources"),
+        if let url = Bundle.module.url(forResource: srcName, withExtension: "png", subdirectory: "Resources"),
            let nsImage = NSImage(contentsOf: url) {
             Image(nsImage: nsImage)
                 .resizable()
+                .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
         } else {
             Image(systemName: "bird.fill")
