@@ -264,6 +264,9 @@ final class ConversationLoop: ObservableObject {
             withIntermediateDirectories: true
         )
 
+        // Load history from previous session before starting new one
+        transcript.loadHistory(fromSessionDir: sessionDir)
+
         try piRPC.start(
             systemPrompt: systemPrompt,
             workingDirectory: home,
