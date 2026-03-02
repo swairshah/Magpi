@@ -318,9 +318,6 @@ final class ConversationLoop: ObservableObject {
         case .agentEnd:
             // Log full assistant response before finalizing
             if let last = transcript.messages.last, last.role == .assistant {
-                if last.text.isEmpty {
-                    transcript.addLog("⚠️ Agent response was empty (tool-only turn?)")
-                }
                 transcript.logTurn(role: "ASSISTANT", text: last.text)
             }
             transcript.endAssistantMessage()
@@ -645,7 +642,14 @@ final class ConversationLoop: ObservableObject {
     }
 
     private func handleStopRequest() {
-        stopSpeech()
+        // Broker stop = just stop TTS playback (e.g. pi-tts clears old speech
+        // when a new user message starts). Do NOT abort the agent — the stop
+        // is for audio only.
+        audioPlayer.stop()
+        clearSpeechQueue()
+        if state == .speaking {
+            state = .idle
+        }
     }
 
     /// Stop all TTS playback and clear the speech queue. (Cmd+.)

@@ -330,6 +330,16 @@ struct MainWindowView: View {
                             conversationLoop.piRPC.sendPrompt(text)
                         }
                     }
+                },
+                onNewSession: {
+                    conversationLoop.transcript.clearMessages()
+                    conversationLoop.transcript.addLog("🔄 Starting new session")
+                    conversationLoop.piRPC.newSession()
+                    conversationLoop.transcript.addSystemMessage("New session started")
+                },
+                onClearHistory: {
+                    conversationLoop.transcript.clearMessages()
+                    conversationLoop.transcript.clearLogs()
                 }
             )
         }
@@ -451,11 +461,35 @@ struct ConversationView: View {
     @State private var inputText = ""
     @State private var showingLogs = false
     var onSend: (String) -> Void
+    var onNewSession: (() -> Void)? = nil
+    var onClearHistory: (() -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
             // Toolbar
-            HStack {
+            HStack(spacing: 8) {
+                // New session button
+                Button {
+                    onNewSession?()
+                } label: {
+                    Label("New Session", systemImage: "plus.circle")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+                .help("Start a new conversation (clears Pi context)")
+
+                // Clear history button
+                Button {
+                    onClearHistory?()
+                } label: {
+                    Label("Clear", systemImage: "trash")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+                .help("Clear chat history from display")
+
                 Spacer()
 
                 Picker("", selection: $showingLogs) {

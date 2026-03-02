@@ -42,8 +42,8 @@ final class PiRPCClient {
     private let queue = DispatchQueue(label: "magpi.rpc", qos: .userInitiated)
     private var nextRequestId = 1
 
-    // Accumulate partial lines from stdout
-    private var stdoutBuffer = ""
+    // Accumulate raw bytes from stdout to handle UTF-8 split across pipe reads
+    private var stdoutRawBuffer = Data()
 
     init() {}
 
@@ -125,13 +125,12 @@ final class PiRPCClient {
         self.stdoutPipe = stdout
         self.stderrPipe = stderr
 
-        // Handle stdout — NDJSON events
+        // Handle stdout — NDJSON events (accumulate raw bytes to handle UTF-8 splits)
         stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty else { return }
-            guard let text = String(data: data, encoding: .utf8) else { return }
             self?.queue.async {
-                self?.handleStdoutData(text)
+                self?.handleStdoutRawData(data)
             }
         }
 
@@ -184,7 +183,7 @@ final class PiRPCClient {
         stderrPipe = nil
         isRunning = false
         isStreaming = false
-        stdoutBuffer = ""
+        stdoutRawBuffer = Data()
     }
 
     // MARK: - Commands
@@ -269,17 +268,25 @@ final class PiRPCClient {
         }
     }
 
-    private func handleStdoutData(_ text: String) {
-        stdoutBuffer += text
+    /// Accumulate raw bytes and extract complete lines (newline-delimited).
+    /// This avoids a UTF-8 split issue where String(data:encoding:.utf8)
+    /// returns nil when a multi-byte character is split across pipe reads,
+    /// silently dropping data and corrupting the line buffer.
+    private func handleStdoutRawData(_ data: Data) {
+        stdoutRawBuffer.append(data)
 
-        // Process complete lines
-        while let newlineRange = stdoutBuffer.range(of: "\n") {
-            let line = String(stdoutBuffer[stdoutBuffer.startIndex..<newlineRange.lowerBound])
-            stdoutBuffer = String(stdoutBuffer[newlineRange.upperBound...])
+        while let newlineIndex = stdoutRawBuffer.firstIndex(of: 0x0A) {
+            let lineData = stdoutRawBuffer[stdoutRawBuffer.startIndex..<newlineIndex]
+            stdoutRawBuffer.removeSubrange(stdoutRawBuffer.startIndex...newlineIndex)
 
-            if !line.isEmpty {
-                parseEvent(line)
+            guard !lineData.isEmpty else { continue }
+
+            guard let line = String(data: lineData, encoding: .utf8) else {
+                print("Magpi: [rpc] Failed to decode line as UTF-8 (\(lineData.count) bytes)")
+                continue
             }
+
+            parseEvent(line)
         }
     }
 
@@ -327,15 +334,8 @@ final class PiRPCClient {
                         onEvent?(.textEnd(content))
                     }
                 default:
-                    // Log unhandled delta types for debugging
-                    if deltaType != "thinking_delta" && deltaType != "thinking_end" {
-                        print("Magpi: [rpc] unhandled delta type: \(deltaType)")
-                    }
                     break
                 }
-            } else {
-                // message_update without assistantMessageEvent
-                print("Magpi: [rpc] message_update without assistantMessageEvent: \(json.keys.sorted())")
             }
 
         case "tool_execution_start":
