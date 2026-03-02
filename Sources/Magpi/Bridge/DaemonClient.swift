@@ -55,8 +55,18 @@ enum DaemonClient {
             return parts.joined(separator: "/")
         }
 
-        /// Whether this process is orphaned (parent is launchd/init, pid 1)
-        var isOrphaned: Bool { ppid == 1 }
+        /// Whether this process is orphaned.
+        /// Statusd may cache stale ppid values, so we also check if the
+        /// parent process actually exists AND has an attached terminal window.
+        var isOrphaned: Bool {
+            // Quick check from statusd data
+            if ppid == 1 { return true }
+            // Check if parent is still alive (statusd caches stale ppids)
+            if kill(ppid, 0) != 0 { return true }
+            // No attached terminal window is a strong orphan signal
+            if attachedWindow == false { return true }
+            return false
+        }
 
         /// A distinguishing label for agents in the same cwd.
         /// Uses mux session name or TTY to tell them apart.

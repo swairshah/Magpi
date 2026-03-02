@@ -318,6 +318,9 @@ final class ConversationLoop: ObservableObject {
         case .agentEnd:
             // Log full assistant response before finalizing
             if let last = transcript.messages.last, last.role == .assistant {
+                if last.text.isEmpty {
+                    transcript.addLog("⚠️ Agent response was empty (tool-only turn?)")
+                }
                 transcript.logTurn(role: "ASSISTANT", text: last.text)
             }
             transcript.endAssistantMessage()

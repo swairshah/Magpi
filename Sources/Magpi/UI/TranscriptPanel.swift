@@ -217,10 +217,17 @@ struct MessageBubble: View {
 
             // Content
             VStack(alignment: .leading, spacing: 2) {
-                Text(displayText)
-                    .textSelection(.enabled)
-                    .font(.callout)
-                    .foregroundColor(textColor)
+                if !displayText.isEmpty {
+                    Text(displayText)
+                        .textSelection(.enabled)
+                        .font(.callout)
+                        .foregroundColor(textColor)
+                } else if message.isComplete && message.role == .assistant {
+                    // Agent responded with tool calls only / no visible text
+                    Text("(working…)")
+                        .font(.caption)
+                        .foregroundColor(.secondary.opacity(0.4))
+                }
 
                 if !message.isComplete {
                     HStack(spacing: 4) {

@@ -327,8 +327,15 @@ final class PiRPCClient {
                         onEvent?(.textEnd(content))
                     }
                 default:
+                    // Log unhandled delta types for debugging
+                    if deltaType != "thinking_delta" && deltaType != "thinking_end" {
+                        print("Magpi: [rpc] unhandled delta type: \(deltaType)")
+                    }
                     break
                 }
+            } else {
+                // message_update without assistantMessageEvent
+                print("Magpi: [rpc] message_update without assistantMessageEvent: \(json.keys.sorted())")
             }
 
         case "tool_execution_start":
