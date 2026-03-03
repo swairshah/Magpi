@@ -104,20 +104,21 @@ struct MainWindowView: View {
                 ))
                 .keyboardShortcut("s", modifiers: .option)
 
-                // Barge-in toggle
+                // Text-only / Voice toggle
                 Button {
-                    conversationLoop.bargeInEnabled.toggle()
+                    conversationLoop.textOnlyMode.toggle()
                 } label: {
                     Label(
-                        conversationLoop.bargeInEnabled ? "Barge-in" : "No barge-in",
-                        systemImage: conversationLoop.bargeInEnabled ? "headphones" : "speaker.wave.2"
+                        conversationLoop.textOnlyMode ? "Text" : "Voice",
+                        systemImage: conversationLoop.textOnlyMode ? "text.bubble" : "speaker.wave.2.fill"
                     )
                     .font(.caption.weight(.medium))
                 }
                 .buttonStyle(VoiceControlButtonStyle(
-                    tint: conversationLoop.bargeInEnabled ? .green : .secondary
+                    tint: conversationLoop.textOnlyMode ? .orange : .green
                 ))
-                .keyboardShortcut("b", modifiers: .option)
+                .keyboardShortcut("t", modifiers: .option)
+                .help("⌥T: Toggle text-only responses (no TTS)")
 
                 Spacer()
 

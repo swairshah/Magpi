@@ -50,6 +50,32 @@ final class ConversationLoop: ObservableObject {
     @Published private(set) var isAgentRunning = false
     @Published var isEnabled = true
 
+    /// Text-only mode: voice input works (VAD → STT), but responses are
+    /// plain text in the chat — no TTS output. The broker is not started
+    /// so pi-tts has nowhere to send speak commands.
+    @Published var textOnlyMode = false {
+        didSet {
+            if textOnlyMode {
+                // Stop broker + any playing speech
+                audioPlayer.stop()
+                clearSpeechQueue()
+                piBridge.stopBroker()
+                if state == .speaking { state = .idle }
+                print("Magpi: Text-only mode ON (TTS disabled)")
+                transcript.addLog("🔇 Text-only mode — responses as text")
+            } else {
+                // Restart broker for TTS
+                do {
+                    try piBridge.startBroker()
+                    print("Magpi: Text-only mode OFF (TTS enabled)")
+                    transcript.addLog("🔊 Voice mode — responses spoken")
+                } catch {
+                    print("Magpi: Failed to restart broker: \(error)")
+                }
+            }
+        }
+    }
+
     /// When true, VAD detects speech during TTS playback and interrupts it.
     /// Turn off when not wearing headphones (TTS bleeds into mic).
     @Published var bargeInEnabled = true
@@ -111,17 +137,21 @@ final class ConversationLoop: ObservableObject {
                 print("Magpi: Warning — no STT model found")
             }
 
-            // Start TTS server (if not already running via Loqui)
-            if !(await ttsEngine.checkHealth()) {
-                print("Magpi: Starting TTS server...")
-                try await ttsEngine.startServer()
-            } else {
-                ttsEngine.isServerRunning = true
-                print("Magpi: TTS server already running (Loqui?)")
-            }
+            // Start TTS + broker (skip in text-only mode)
+            if !textOnlyMode {
+                if !(await ttsEngine.checkHealth()) {
+                    print("Magpi: Starting TTS server...")
+                    try await ttsEngine.startServer()
+                } else {
+                    ttsEngine.isServerRunning = true
+                    print("Magpi: TTS server already running (Loqui?)")
+                }
 
-            // Start broker (receives speak commands from pi-talk extension)
-            try piBridge.startBroker()
+                // Start broker (receives speak commands from pi-talk extension)
+                try piBridge.startBroker()
+            } else {
+                print("Magpi: Text-only mode — skipping TTS/broker")
+            }
 
             // Start Pi RPC conversation agent
             try startConversationAgent()
@@ -321,14 +351,18 @@ final class ConversationLoop: ObservableObject {
                 transcript.logTurn(role: "ASSISTANT", text: last.text)
             }
             transcript.endAssistantMessage()
-            // If we're still waiting and nothing was queued to speak,
-            // go back to idle (the response might have had no voice tags)
+            // In text-only mode, go straight to idle (no TTS to wait for).
+            // In voice mode, wait briefly for speak requests to arrive.
             if state == .waiting {
-                Task {
-                    try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
-                    if state == .waiting {
-                        transcript.addLog("No speech queued → idle")
-                        state = .idle
+                if textOnlyMode {
+                    state = .idle
+                } else {
+                    Task {
+                        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
+                        if state == .waiting {
+                            transcript.addLog("No speech queued → idle")
+                            state = .idle
+                        }
                     }
                 }
             }
@@ -631,6 +665,9 @@ final class ConversationLoop: ObservableObject {
     // MARK: - Speech (TTS) Handling
 
     private func handleSpeakRequest(_ request: PiBridge.SpeakRequest) {
+        // In text-only mode, ignore speak requests — responses show as text in chat
+        guard !textOnlyMode else { return }
+
         speechQueueLock.lock()
         speechQueue.append((text: request.text, voice: request.voice))
         speechQueueLock.unlock()
