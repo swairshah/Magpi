@@ -26,6 +26,7 @@ let package = Package(
             name: "Magpi",
             dependencies: ["COnnxRuntime"],
             path: "Sources/Magpi",
+            exclude: ["Info.plist"],
             resources: [
                 .copy("Resources"),
             ],
