@@ -57,14 +57,14 @@ enum DaemonClient {
 
         /// Whether this process is orphaned.
         /// Statusd may cache stale ppid values, so we also check if the
-        /// parent process actually exists AND has an attached terminal window.
+        /// parent process actually exists.
         var isOrphaned: Bool {
             // Quick check from statusd data
             if ppid == 1 { return true }
             // Check if parent is still alive (statusd caches stale ppids)
             if kill(ppid, 0) != 0 { return true }
-            // No attached terminal window is a strong orphan signal
-            if attachedWindow == false { return true }
+            // Note: attachedWindow can be false for multiplexers (cmux, tmux)
+            // that statusd doesn't recognize — NOT an orphan signal.
             return false
         }
 
