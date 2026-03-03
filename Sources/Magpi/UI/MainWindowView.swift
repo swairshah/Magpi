@@ -122,15 +122,20 @@ struct MainWindowView: View {
 
                 Spacer()
 
-                // Pause/resume
+                // Listening toggle (⌘/)
                 Button {
                     conversationLoop.isEnabled.toggle()
                 } label: {
-                    Image(systemName: conversationLoop.isEnabled ? "pause.fill" : "play.fill")
-                        .font(.caption)
+                    Label(
+                        conversationLoop.isEnabled ? "Listening" : "Paused",
+                        systemImage: conversationLoop.isEnabled ? "mic.fill" : "mic.slash"
+                    )
+                    .font(.caption.weight(.medium))
                 }
-                .buttonStyle(.borderless)
-                .help(conversationLoop.isEnabled ? "Pause" : "Resume")
+                .buttonStyle(VoiceControlButtonStyle(
+                    tint: conversationLoop.isEnabled ? .blue : .secondary
+                ))
+                .help("⌘/ Toggle continuous listening")
             }
         }
     }

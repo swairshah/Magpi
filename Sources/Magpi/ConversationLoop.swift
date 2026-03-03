@@ -48,7 +48,9 @@ final class ConversationLoop: ObservableObject {
     @Published private(set) var state: State = .idle
     @Published private(set) var audioLevel: Float = 0
     @Published private(set) var isAgentRunning = false
-    @Published var isEnabled = true
+    /// When true, VAD continuously listens for speech. Toggle with ⌘/.
+    /// When false, use Record (⌥S) for push-to-talk.
+    @Published var isEnabled = false
 
     /// Text-only mode: voice input works (VAD → STT), but responses are
     /// plain text in the chat — no TTS output. The broker is not started

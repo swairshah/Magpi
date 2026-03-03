@@ -21,9 +21,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var conversationLoop: ConversationLoop!
     private var mainWindow: NSWindow?
     private var globalHotkeyMonitor: Any?
-    // Carbon hotkey for Cmd+. (stop speech)
+    // Carbon hotkeys: Cmd+. (stop speech), Cmd+/ (toggle listening)
     private var carbonEventHandler: EventHandlerRef?
     private var carbonHotKeyRef: EventHotKeyRef?
+    private var carbonListenHotKeyRef: EventHotKeyRef?
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false  // Keep running in menubar when window is closed
@@ -94,6 +95,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSEvent.removeMonitor(monitor)
         }
         if let ref = carbonHotKeyRef {
+            UnregisterEventHotKey(ref)
+        }
+        if let ref = carbonListenHotKeyRef {
             UnregisterEventHotKey(ref)
         }
         if let handler = carbonEventHandler {
@@ -169,13 +173,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Carbon global hotkey for Cmd+. (stop speech) — works everywhere
-        registerCmdPeriodHotkey()
+        // Carbon global hotkeys — work everywhere, even when not focused
+        registerCarbonHotkeys()
 
-        print("Magpi: Global hotkeys: ⌘. = stop speech, ⌥S = record toggle, ⌥B = barge-in toggle")
+        print("Magpi: Global hotkeys: ⌘/ = toggle listening, ⌘. = stop speech, ⌥S = record toggle")
     }
 
-    private func registerCmdPeriodHotkey() {
+    private func registerCarbonHotkeys() {
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed)
@@ -184,9 +188,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let handler: EventHandlerUPP = { _, event, userData -> OSStatus in
             guard let userData = userData else { return OSStatus(eventNotHandledErr) }
             let appDelegate = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
+
+            // Read which hotkey was pressed
+            var hotKeyID = EventHotKeyID()
+            GetEventParameter(event,
+                              EventParamName(kEventParamDirectObject),
+                              EventParamType(typeEventHotKeyID),
+                              nil, MemoryLayout<EventHotKeyID>.size, nil,
+                              &hotKeyID)
+
             DispatchQueue.main.async {
-                appDelegate.conversationLoop?.stopSpeech()
-                print("Magpi: ⌘. Stop speech")
+                switch hotKeyID.id {
+                case 1: // Cmd+. → stop speech
+                    appDelegate.conversationLoop?.stopSpeech()
+                    print("Magpi: ⌘. Stop speech")
+                case 2: // Cmd+/ → toggle listening
+                    guard let loop = appDelegate.conversationLoop else { return }
+                    loop.isEnabled.toggle()
+                    let status = loop.isEnabled ? "ON — listening" : "OFF — push-to-talk only"
+                    print("Magpi: ⌘/ Listening \(status)")
+                    loop.transcript.addLog(loop.isEnabled ? "🎙️ Listening enabled (⌘/)" : "🔇 Listening disabled (⌘/)")
+                default:
+                    break
+                }
             }
             return noErr
         }
@@ -198,13 +222,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             selfPtr, &carbonEventHandler
         )
 
-        // Key code 47 = period (.)
-        let hotKeyID = EventHotKeyID(signature: OSType(0x4D414750), id: 1) // "MAGP"
-        let modifiers: UInt32 = UInt32(cmdKey)
+        // Cmd+. (key code 47 = period)
+        let stopID = EventHotKeyID(signature: OSType(0x4D414750), id: 1) // "MAGP"
         RegisterEventHotKey(
-            47, modifiers, hotKeyID,
+            47, UInt32(cmdKey), stopID,
             GetApplicationEventTarget(), 0,
             &carbonHotKeyRef
+        )
+
+        // Cmd+/ (key code 44 = slash)
+        let listenID = EventHotKeyID(signature: OSType(0x4D414750), id: 2)
+        RegisterEventHotKey(
+            44, UInt32(cmdKey), listenID,
+            GetApplicationEventTarget(), 0,
+            &carbonListenHotKeyRef
         )
     }
 
