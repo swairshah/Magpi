@@ -25,9 +25,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var carbonEventHandler: EventHandlerRef?
     private var carbonHotKeyRef: EventHotKeyRef?
 
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        return false  // Keep running in menubar when window is closed
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Show dock icon — this is a proper app, not just a menubar accessory
         NSApp.setActivationPolicy(.regular)
+
+        // Prevent macOS from auto-terminating us when idle
+        ProcessInfo.processInfo.disableAutomaticTermination("Voice conversation loop active")
 
         // Set app icon from bundled icns
         if let icnsURL = Bundle.module.url(forResource: "Magpi", withExtension: "icns", subdirectory: "Resources"),
