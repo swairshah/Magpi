@@ -3,6 +3,7 @@ import Foundation
 enum Constants {
     // MARK: - Audio
     static let sampleRate: Double = 16_000         // 16 kHz for VAD + STT
+    static let ttsSampleRate: Double = 24_000      // 24 kHz from pocket-tts (s16le)
     static let audioChannels: Int = 1              // Mono
     
     // MARK: - VAD (Silero)

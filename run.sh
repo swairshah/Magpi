@@ -9,4 +9,7 @@ if [ ! -d "vendor/onnxruntime" ]; then
 fi
 
 swift build 2>&1
+
+# ONNX Runtime must be on the library path
+export DYLD_LIBRARY_PATH="$(pwd)/vendor/onnxruntime/lib:${DYLD_LIBRARY_PATH:-}"
 exec .build/debug/Magpi "$@"

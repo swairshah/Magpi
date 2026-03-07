@@ -28,5 +28,7 @@
     <string>NSApplication</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Magpi needs microphone access for voice conversations with Pi agents.</string>
+    <key>NSAlwaysAllowMicrophoneModeControl</key>
+    <true/>
 </dict>
 </plist>

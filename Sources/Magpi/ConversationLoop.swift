@@ -164,8 +164,15 @@ final class ConversationLoop: ObservableObject {
                 return
             }
 
-            // Start audio capture
+            // Start audio capture (with voice processing / AEC)
             try audioCapture.start()
+
+            // Attach the audio player to the same engine so that
+            // TTS playback goes through the voice-processed output
+            // and macOS can subtract it from the mic input (AEC).
+            if let engine = audioCapture.engine {
+                audioPlayer.attach(to: engine)
+            }
 
             state = .idle
 
@@ -179,6 +186,7 @@ final class ConversationLoop: ObservableObject {
     /// Stop the conversation loop.
     func stop() {
         audioPlayer.stop()
+        audioPlayer.detach()
         audioCapture.stop()
         ttsEngine.stopServer()
         piBridge.stopBroker()
