@@ -38,7 +38,7 @@ final class AudioPlayer {
     /// ffplay process for fallback playback.
     private var currentProcess: Process?
     private let lock = NSLock()
-    private var playbackContinuation: CheckedContinuation<Void, Never>?
+    private var playbackContinuation: CheckedContinuation<Void, Error>?
 
     /// Whether audio is currently playing.
     var isPlaying: Bool {
@@ -112,14 +112,22 @@ final class AudioPlayer {
     /// Uses the shared AVAudioEngine if attached, otherwise falls back to ffplay.
     func play(audioData: Data) async throws {
         lock.lock()
-        let hasEngine = playerNode != nil && converter != nil && outputFormat != nil
+        let hasEngine = playerNode != nil &&
+            attachedEngine != nil &&
+            converter != nil &&
+            outputFormat != nil
         lock.unlock()
 
         if hasEngine {
-            try await playViaEngine(audioData: audioData)
-        } else {
-            try await playViaFFPlay(audioData: audioData)
+            do {
+                try await playViaEngine(audioData: audioData)
+                return
+            } catch PlayerError.noPlaybackMethod {
+                print("Magpi: AudioPlayer engine unavailable, falling back to ffplay")
+            }
         }
+
+        try await playViaFFPlay(audioData: audioData)
     }
 
     /// Stop current playback immediately (for barge-in or push-to-talk).
@@ -136,15 +144,19 @@ final class AudioPlayer {
         if let process = process, process.isRunning {
             process.terminate()
         }
-        cont?.resume()
+        cont?.resume(returning: ())
     }
 
     // MARK: - Engine Playback (AEC path)
 
     private func playViaEngine(audioData: Data) async throws {
         lock.lock()
-        guard let node = playerNode, let converter = converter,
-              let outFormat = outputFormat else {
+        guard let node = playerNode,
+              let engine = attachedEngine,
+              let converter = converter,
+              let outFormat = outputFormat,
+              node.engine === engine,
+              engine.isRunning else {
             lock.unlock()
             throw PlayerError.noPlaybackMethod
         }
@@ -192,13 +204,24 @@ final class AudioPlayer {
         }
 
         // Schedule and play, waiting for completion
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             lock.lock()
+
             // Resume any leaked previous continuation before replacing
             let previousCont = playbackContinuation
             playbackContinuation = continuation
-            lock.unlock()
-            previousCont?.resume()
+
+            guard let attachedEngine,
+                  playerNode === node,
+                  node.engine === attachedEngine,
+                  attachedEngine === engine,
+                  attachedEngine.isRunning else {
+                playbackContinuation = nil
+                lock.unlock()
+                previousCont?.resume(returning: ())
+                continuation.resume(throwing: PlayerError.noPlaybackMethod)
+                return
+            }
 
             node.stop()  // Stop any previous playback
             node.scheduleBuffer(outputBuffer) { [weak self] in
@@ -206,9 +229,12 @@ final class AudioPlayer {
                 let cont = self?.playbackContinuation
                 self?.playbackContinuation = nil
                 self?.lock.unlock()
-                cont?.resume()
+                cont?.resume(returning: ())
             }
             node.play()
+            lock.unlock()
+
+            previousCont?.resume(returning: ())
         }
     }
 
@@ -247,13 +273,21 @@ final class AudioPlayer {
 
         try process.run()
 
-        await withCheckedContinuation { continuation in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            lock.lock()
+            let previousCont = playbackContinuation
+            playbackContinuation = continuation
+            lock.unlock()
+
+            previousCont?.resume(returning: ())
+
             process.terminationHandler = { [weak self] _ in
                 self?.lock.lock()
                 self?.currentProcess = nil
+                let cont = self?.playbackContinuation
                 self?.playbackContinuation = nil
                 self?.lock.unlock()
-                continuation.resume()
+                cont?.resume(returning: ())
             }
         }
     }

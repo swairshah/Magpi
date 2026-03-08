@@ -99,6 +99,8 @@ final class ConversationLoop: ObservableObject {
     // Speech queue from broker
     private var speechQueue: [(text: String, voice: String?)] = []
     private let speechQueueLock = NSLock()
+    /// Guards against concurrent processNextSpeech tasks.
+    private var isDrainingSpeechQueue = false
 
     init() {
         setupCallbacks()
@@ -379,7 +381,9 @@ final class ConversationLoop: ObservableObject {
     /// removes the orange recording indicator.
     private func muteAudio() {
         audioPlayer.stop()
+        audioPlayer.detach()
         clearSpeechQueue()
+        isDrainingSpeechQueue = false
         audioCapture.stop()
         sileroVAD?.reset()
         audioBuffer.reset()
@@ -466,6 +470,7 @@ final class ConversationLoop: ObservableObject {
                     print("Magpi: Barge-in detected!")
                     audioPlayer.stop()
                     clearSpeechQueue()
+                    isDrainingSpeechQueue = false
                     if piRPC.isStreaming {
                         piRPC.abort()
                     }
@@ -487,6 +492,7 @@ final class ConversationLoop: ObservableObject {
                 if bargeInChunkCount >= Constants.bargeInMinChunks {
                     print("Magpi: User speaking while waiting — interrupting")
                     clearSpeechQueue()
+                    isDrainingSpeechQueue = false
                     if piRPC.isStreaming {
                         piRPC.abort()
                     }
@@ -617,7 +623,13 @@ final class ConversationLoop: ObservableObject {
         speechQueue.append((text: request.text, voice: request.voice))
         speechQueueLock.unlock()
 
-        if state == .waiting || state == .idle {
+        // Only kick off the drain loop if one isn't already running.
+        // Without this guard, rapid speak requests can spawn multiple
+        // concurrent processNextSpeech tasks (the Task body doesn't
+        // execute immediately, so state is still .waiting when the
+        // next request arrives), causing audio to play twice.
+        if !isDrainingSpeechQueue && (state == .waiting || state == .idle) {
+            isDrainingSpeechQueue = true
             Task { await processNextSpeech() }
         }
     }
@@ -625,6 +637,7 @@ final class ConversationLoop: ObservableObject {
     private func handleStopRequest() {
         audioPlayer.stop()
         clearSpeechQueue()
+        isDrainingSpeechQueue = false
         if state == .speaking {
             state = .idle
         }
@@ -634,6 +647,7 @@ final class ConversationLoop: ObservableObject {
     func stopSpeech() {
         audioPlayer.stop()
         clearSpeechQueue()
+        isDrainingSpeechQueue = false
         if state == .speaking {
             state = .idle
         }
@@ -647,6 +661,7 @@ final class ConversationLoop: ObservableObject {
         speechQueueLock.lock()
         guard !speechQueue.isEmpty else {
             speechQueueLock.unlock()
+            isDrainingSpeechQueue = false
             if state == .speaking {
                 sileroVAD?.reset()
                 state = .idle
@@ -665,17 +680,24 @@ final class ConversationLoop: ObservableObject {
         do {
             let audioData = try await ttsEngine.synthesize(text: item.text, voice: item.voice, speed: speechSpeed)
 
-            guard state == .speaking else { return }
+            guard state == .speaking else {
+                isDrainingSpeechQueue = false
+                return
+            }
 
             try await audioPlayer.play(audioData: audioData)
 
             if state == .speaking {
                 await processNextSpeech()
+            } else {
+                isDrainingSpeechQueue = false
             }
         } catch {
             print("Magpi: TTS playback error: \(error)")
             if state == .speaking {
                 await processNextSpeech()
+            } else {
+                isDrainingSpeechQueue = false
             }
         }
     }
