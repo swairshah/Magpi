@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Shows running Pi agents discovered from pi-statusd + pi-report.
+/// Shows running Pi agents discovered from pi-telemetry snapshots + pi-report.
 struct AgentListView: View {
     @ObservedObject var agentStore: AgentStore
     @State private var composingForPid: Int32? = nil
@@ -41,10 +41,10 @@ struct AgentListView: View {
     private var summaryBar: some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(agentStore.isDaemonRunning ? Color.green : Color.red)
+                .fill(agentStore.isTelemetryAvailable ? Color.green : Color.red)
                 .frame(width: 8, height: 8)
 
-            Text(agentStore.isDaemonRunning ? "statusd connected" : "statusd offline")
+            Text(agentStore.isTelemetryAvailable ? "telemetry active" : "no telemetry")
                 .font(.caption)
                 .foregroundColor(.secondary)
 
@@ -91,17 +91,13 @@ struct AgentListView: View {
                 .foregroundColor(.secondary)
             Text("No Pi agents running")
                 .foregroundColor(.secondary)
-            if !agentStore.isDaemonRunning {
-                Text("Start pi-statusd first:")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text("statusdctl start")
-                    .font(.caption.monospaced())
+            Text("Start a Pi session and it will appear here")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            if !agentStore.isTelemetryAvailable {
+                Text("(pi-telemetry extension required)")
+                    .font(.caption2)
                     .foregroundColor(.orange)
-            } else {
-                Text("Start a Pi session and it will appear here")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -233,14 +229,8 @@ struct AgentListView: View {
     // MARK: - Actions
 
     private func jumpToAgent(pid: Int32) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let response = DaemonClient.jump(pid: pid)
-            DispatchQueue.main.async {
-                if response?.ok != true {
-                    print("Magpi: Jump failed for PID \(pid)")
-                }
-            }
-        }
+        guard let agent = agentStore.agents.first(where: { $0.pid == pid }) else { return }
+        agentStore.jumpToAgent(agent)
     }
 
     private func sendMessage(pid: Int32) {

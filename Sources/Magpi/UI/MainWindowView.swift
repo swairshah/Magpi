@@ -131,7 +131,7 @@ struct MainWindowView: View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
                 Circle()
-                    .fill(agentStore.isDaemonRunning ? Color.green : Color.red)
+                    .fill(agentStore.isTelemetryAvailable ? Color.green : Color.red)
                     .frame(width: 6, height: 6)
                 Text("\(agentStore.summary.total) agents")
                     .font(.caption)
@@ -369,9 +369,7 @@ struct SidebarAgentRow: View {
                 Spacer()
 
                 Button("Jump") {
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        _ = DaemonClient.jump(pid: agent.pid)
-                    }
+                    agentStore.jumpToAgent(agent)
                 }
                 .font(.caption2)
                 .buttonStyle(.borderless)

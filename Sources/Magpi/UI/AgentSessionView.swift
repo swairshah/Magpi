@@ -50,9 +50,7 @@ struct AgentSessionView: View {
                 Spacer()
 
                 Button {
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        _ = DaemonClient.jump(pid: agent.pid)
-                    }
+                    agentStore.jumpToAgent(agent)
                 } label: {
                     Label("Jump", systemImage: "rectangle.portrait.and.arrow.forward")
                         .font(.caption.weight(.medium))

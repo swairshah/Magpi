@@ -1,14 +1,15 @@
 import Foundation
 import Combine
 
-/// Maintains a live list of running Pi agents by merging data from
-/// pi-statusd (PIDs, activity) and pi-report JSONL files (task status).
+/// Maintains a live list of running Pi agents by reading pi-telemetry
+/// instance snapshots and merging with pi-report JSONL status files.
 @MainActor
 final class AgentStore: ObservableObject {
 
-    /// Merged agent info combining statusd + reports data
+    /// Agent info parsed from pi-telemetry snapshots + pi-report data
     struct AgentInfo: Identifiable {
         let pid: Int32
+        let ppid: Int32
         let cwd: String
         let projectName: String
         let activity: String
@@ -16,10 +17,17 @@ final class AgentStore: ObservableObject {
         let mux: String?
         let muxSession: String?
         let terminalApp: String?
+        let terminalPid: Int32?
         /// TTY or mux session name for disambiguation
         let disambiguationLabel: String?
-        /// Process parent is launchd (pid 1) — likely a leaked/orphaned process
+        /// Process parent is launchd (pid 1) or dead
         let isOrphaned: Bool
+        /// Git branch from telemetry
+        let gitBranch: String?
+        /// Context usage percent from telemetry
+        let contextPercent: Double?
+        /// Session name from telemetry
+        let sessionName: String?
 
         // From pi-report
         var lastStatusType: String?
@@ -31,17 +39,20 @@ final class AgentStore: ObservableObject {
 
         var id: Int32 { pid }
 
-        /// Display name: project name + disambiguation if needed
+        /// Display name: session title > session name > project name
         var displayName: String {
             if let title = sessionTitle, !title.isEmpty {
                 return title
+            }
+            if let name = sessionName, !name.isEmpty {
+                return name
             }
             return projectName
         }
 
         var activityColor: String {
             switch activity {
-            case "running": return "red"
+            case "running", "working": return "red"
             case "waiting_input": return "green"
             default: return "gray"
             }
@@ -58,7 +69,7 @@ final class AgentStore: ObservableObject {
 
     @Published private(set) var agents: [AgentInfo] = []
     @Published private(set) var summary = Summary()
-    @Published private(set) var isDaemonRunning = false
+    @Published private(set) var isTelemetryAvailable = false
 
     private var pollTimer: Timer?
     private var reportWatcher: DispatchSourceFileSystemObject?
@@ -69,25 +80,31 @@ final class AgentStore: ObservableObject {
     /// Cache: PID → matched session file URL
     private var sessionFileCache: [Int32: URL] = [:]
 
-    // Compute on access to avoid MainActor isolation issues
+    /// Max age in seconds for a telemetry snapshot to be considered alive.
+    /// pi-telemetry heartbeats every 1.5s, so 5s gives a comfortable margin.
+    private nonisolated static let maxSnapshotAgeSec: TimeInterval = 5.0
+
+    private nonisolated static var telemetryDir: String {
+        (NSHomeDirectory() as NSString)
+            .appendingPathComponent(".pi/agent/telemetry/instances")
+    }
+
     private nonisolated static var reportsDir: String {
-        (NSHomeDirectory() as NSString).appendingPathComponent(".pi/agent/magpi-reports")
+        (NSHomeDirectory() as NSString)
+            .appendingPathComponent(".pi/agent/magpi-reports")
     }
 
     // MARK: - Lifecycle
 
-    func start(pollInterval: TimeInterval = 5.0) {
-        // Initial fetch
+    func start(pollInterval: TimeInterval = 3.0) {
         refresh()
 
-        // Periodic polling of statusd
         pollTimer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.refresh()
             }
         }
 
-        // Watch reports directory for changes
         startReportWatcher()
     }
 
@@ -98,31 +115,33 @@ final class AgentStore: ObservableObject {
     }
 
     func refresh() {
-        // Fetch statusd + reports on background thread, merge on main
         let currentTitleCache = sessionTitleCache
         let currentFileCache = sessionFileCache
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let statusdAgents = Self.fetchStatusdAgentsSync()
+            let snapshots = Self.readTelemetrySnapshotsSync()
             let reports = Self.readAllReportsSync()
 
-            // Resolve session titles in background, using cache
+            // Resolve session titles in background
             var newTitleCache: [Int32: String?] = [:]
             var newFileCache: [Int32: URL] = [:]
 
-            for agent in statusdAgents {
-                let pid = agent.pid
-                let cwd = agent.cwd ?? ""
+            for snap in snapshots {
+                let pid = snap.pid
 
-                // Use cached title if PID is known
                 if let cached = currentTitleCache[pid] {
                     newTitleCache[pid] = cached
                     if let cachedFile = currentFileCache[pid] {
                         newFileCache[pid] = cachedFile
                     }
                 } else {
-                    // First time seeing this PID — resolve in background
-                    if let url = SessionReader.sessionFile(cwd: cwd, pid: pid) {
+                    // Try session file from telemetry data
+                    if let sessionFile = snap.sessionFile,
+                       let url = URL(string: "file://\(sessionFile)"),
+                       FileManager.default.fileExists(atPath: sessionFile) {
+                        newFileCache[pid] = url
+                        newTitleCache[pid] = Self.readSessionTitleFast(from: url)
+                    } else if let url = SessionReader.sessionFile(cwd: snap.cwd, pid: pid) {
                         newFileCache[pid] = url
                         newTitleCache[pid] = Self.readSessionTitleFast(from: url)
                     } else {
@@ -136,7 +155,7 @@ final class AgentStore: ObservableObject {
                 self.sessionTitleCache = newTitleCache
                 self.sessionFileCache = newFileCache
                 self.mergeAgents(
-                    statusd: statusdAgents,
+                    snapshots: snapshots,
                     reports: reports,
                     titles: newTitleCache
                 )
@@ -151,7 +170,6 @@ final class AgentStore: ObservableObject {
         let inboxDir = (NSHomeDirectory() as NSString)
             .appendingPathComponent(".pi/agent/pitalk-inbox/\(pid)")
 
-        // Create inbox directory if needed
         try? FileManager.default.createDirectory(
             atPath: inboxDir,
             withIntermediateDirectories: true
@@ -172,16 +190,132 @@ final class AgentStore: ObservableObject {
         print("Magpi: Sent to agent \(pid): \"\(text.prefix(60))\"")
     }
 
-    // MARK: - StatusD (sync, called from background)
+    // MARK: - Jump to Agent
 
-    nonisolated private static func fetchStatusdAgentsSync() -> [DaemonClient.AgentState] {
-        guard let response = DaemonClient.status() else {
-            return []
+    /// Focus the terminal window/tab containing an agent.
+    /// Uses routing info from telemetry to activate the right app.
+    func jumpToAgent(_ agent: AgentInfo) {
+        guard let terminalApp = agent.terminalApp else {
+            print("Magpi: Can't jump — no terminal app info for PID \(agent.pid)")
+            return
         }
-        return response.agents ?? []
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Activate the terminal application
+            let script = """
+            tell application "\(terminalApp)" to activate
+            """
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            proc.arguments = ["-e", script]
+            proc.standardOutput = FileHandle.nullDevice
+            proc.standardError = FileHandle.nullDevice
+            try? proc.run()
+            proc.waitUntilExit()
+
+            DispatchQueue.main.async {
+                if proc.terminationStatus == 0 {
+                    print("Magpi: Jumped to \(terminalApp) for PID \(agent.pid)")
+                } else {
+                    print("Magpi: Jump failed for PID \(agent.pid)")
+                }
+            }
+        }
     }
 
-    // MARK: - Reports (sync, called from background)
+    // MARK: - Telemetry Snapshots
+
+    /// Parsed telemetry snapshot (subset of fields we need)
+    private struct TelemetrySnapshot {
+        let pid: Int32
+        let ppid: Int32
+        let cwd: String
+        let activity: String
+        let modelName: String?
+        let mux: String?
+        let muxSession: String?
+        let terminalApp: String?
+        let terminalPid: Int32?
+        let tty: String?
+        let sessionName: String?
+        let sessionFile: String?
+        let gitBranch: String?
+        let contextPercent: Double?
+    }
+
+    /// Read all live telemetry snapshots from disk
+    nonisolated private static func readTelemetrySnapshotsSync() -> [TelemetrySnapshot] {
+        let dir = telemetryDir
+        guard FileManager.default.fileExists(atPath: dir) else { return [] }
+
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: dir) else {
+            return []
+        }
+
+        let nowMs = Date().timeIntervalSince1970 * 1000
+        var snapshots: [TelemetrySnapshot] = []
+
+        for file in files where file.hasSuffix(".json") {
+            let filePath = (dir as NSString).appendingPathComponent(file)
+            guard let data = try? Data(contentsOf: URL(fileURLWithPath: filePath)),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                continue
+            }
+
+            // Check staleness via heartbeat timestamp
+            guard let process = json["process"] as? [String: Any],
+                  let updatedAt = process["updatedAt"] as? Double else {
+                continue
+            }
+
+            let ageMs = nowMs - updatedAt
+            if ageMs > maxSnapshotAgeSec * 1000 {
+                // Stale — process is dead, clean up the file
+                try? FileManager.default.removeItem(atPath: filePath)
+                continue
+            }
+
+            guard let pid = process["pid"] as? Int,
+                  let ppid = process["ppid"] as? Int else {
+                continue
+            }
+
+            let workspace = json["workspace"] as? [String: Any]
+            let cwd = workspace?["cwd"] as? String ?? "unknown"
+            let git = workspace?["git"] as? [String: Any]
+
+            let state = json["state"] as? [String: Any]
+            let activity = state?["activity"] as? String ?? "unknown"
+
+            let model = json["model"] as? [String: Any]
+            let routing = json["routing"] as? [String: Any]
+            let session = json["session"] as? [String: Any]
+            let context = json["context"] as? [String: Any]
+
+            let terminalPidRaw = routing?["terminalPid"] as? Int
+
+            snapshots.append(TelemetrySnapshot(
+                pid: Int32(pid),
+                ppid: Int32(ppid),
+                cwd: cwd,
+                activity: activity,
+                modelName: model?["name"] as? String ?? model?["id"] as? String,
+                mux: routing?["mux"] as? String,
+                muxSession: routing?["muxSession"] as? String,
+                terminalApp: routing?["terminalApp"] as? String,
+                terminalPid: terminalPidRaw.map { Int32($0) },
+                tty: routing?["tty"] as? String,
+                sessionName: session?["name"] as? String,
+                sessionFile: session?["file"] as? String,
+                gitBranch: git?["branch"] as? String,
+                contextPercent: context?["percent"] as? Double
+            ))
+        }
+
+        return snapshots
+    }
+
+    // MARK: - Reports
 
     private struct ReportEntry: Decodable {
         let pid: Int?
@@ -192,7 +326,6 @@ final class AgentStore: ObservableObject {
         let timestamp: Int?
     }
 
-    /// Read the last report entry for each PID
     nonisolated private static func readAllReportsSync() -> [Int32: ReportEntry] {
         let dir = reportsDir
         guard FileManager.default.fileExists(atPath: dir) else { return [:] }
@@ -205,7 +338,6 @@ final class AgentStore: ObservableObject {
 
         for file in files where file.hasSuffix(".jsonl") {
             let filePath = (dir as NSString).appendingPathComponent(file)
-            // Read only the last few KB of the file (the latest entry)
             guard let handle = FileHandle(forReadingAtPath: filePath) else { continue }
             defer { handle.closeFile() }
 
@@ -216,7 +348,6 @@ final class AgentStore: ObservableObject {
 
             guard let content = String(data: tailData, encoding: .utf8) else { continue }
 
-            // Read the last non-empty line (most recent status)
             let lines = content.components(separatedBy: "\n").filter { !$0.isEmpty }
             guard let lastLine = lines.last,
                   let lineData = lastLine.data(using: .utf8),
@@ -234,30 +365,60 @@ final class AgentStore: ObservableObject {
     // MARK: - Merging
 
     private func mergeAgents(
-        statusd: [DaemonClient.AgentState],
+        snapshots: [TelemetrySnapshot],
         reports: [Int32: ReportEntry],
         titles: [Int32: String?]
     ) {
-        let daemonOk = !statusd.isEmpty || DaemonClient.isDaemonRunning()
-        isDaemonRunning = daemonOk
+        isTelemetryAvailable = FileManager.default.fileExists(atPath: Self.telemetryDir)
 
         var merged: [AgentInfo] = []
 
-        for agent in statusd {
-            let report = reports[agent.pid]
+        for snap in snapshots {
+            let report = reports[snap.pid]
+
+            let home = NSHomeDirectory()
+            let cwd = snap.cwd
+            let display: String
+            if cwd == home {
+                display = "~"
+            } else if cwd.hasPrefix(home) {
+                display = "~" + cwd.dropFirst(home.count)
+            } else {
+                display = cwd
+            }
+            let projectName = display.split(separator: "/").suffix(2).joined(separator: "/")
+
+            // Disambiguation label
+            let disambiguationLabel: String? = {
+                if let muxSession = snap.muxSession, !muxSession.isEmpty {
+                    return muxSession
+                }
+                if let tty = snap.tty, !tty.isEmpty {
+                    return tty.split(separator: "/").last.map(String.init) ?? tty
+                }
+                return nil
+            }()
+
+            // Orphan detection
+            let isOrphaned = snap.ppid == 1 || kill(snap.ppid, 0) != 0
 
             var info = AgentInfo(
-                pid: agent.pid,
-                cwd: agent.cwd ?? "unknown",
-                projectName: agent.projectName,
-                activity: agent.activity,
-                model: nil,
-                mux: agent.mux,
-                muxSession: agent.muxSession,
-                terminalApp: agent.terminalApp,
-                disambiguationLabel: agent.disambiguationLabel,
-                isOrphaned: agent.isOrphaned,
-                sessionTitle: titles[agent.pid] ?? nil
+                pid: snap.pid,
+                ppid: snap.ppid,
+                cwd: cwd,
+                projectName: projectName.isEmpty ? "~" : projectName,
+                activity: snap.activity,
+                model: snap.modelName,
+                mux: snap.mux,
+                muxSession: snap.muxSession,
+                terminalApp: snap.terminalApp,
+                terminalPid: snap.terminalPid,
+                disambiguationLabel: disambiguationLabel,
+                isOrphaned: isOrphaned,
+                gitBranch: snap.gitBranch,
+                contextPercent: snap.contextPercent,
+                sessionName: snap.sessionName,
+                sessionTitle: titles[snap.pid] ?? nil
             )
 
             if let report = report {
@@ -271,7 +432,7 @@ final class AgentStore: ObservableObject {
             merged.append(info)
         }
 
-        // Sort: orphaned last, then running first, then waiting, then by project name
+        // Sort: orphaned last, then running first, then waiting, then by project
         merged.sort { a, b in
             if a.isOrphaned != b.isOrphaned { return !a.isOrphaned }
             let aOrder = activityOrder(a.activity)
@@ -283,15 +444,15 @@ final class AgentStore: ObservableObject {
         self.agents = merged
         self.summary = Summary(
             total: merged.count,
-            running: merged.filter { $0.activity == "running" }.count,
+            running: merged.filter { $0.activity == "running" || $0.activity == "working" }.count,
             waitingInput: merged.filter { $0.activity == "waiting_input" }.count,
-            unknown: merged.filter { $0.activity != "running" && $0.activity != "waiting_input" }.count
+            unknown: merged.filter { $0.activity != "running" && $0.activity != "working" && $0.activity != "waiting_input" }.count
         )
     }
 
     private func activityOrder(_ activity: String) -> Int {
         switch activity {
-        case "running": return 0
+        case "running", "working": return 0
         case "waiting_input": return 1
         default: return 2
         }
@@ -299,13 +460,10 @@ final class AgentStore: ObservableObject {
 
     // MARK: - Session Title (fast, streaming read)
 
-    /// Read just the first user message from a session file.
-    /// Uses streaming read — doesn't load entire file into memory.
     nonisolated private static func readSessionTitleFast(from url: URL) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { handle.closeFile() }
 
-        // Read first 32KB — the first user message is always near the top
         let chunk = handle.readData(ofLength: 32 * 1024)
         guard let content = String(data: chunk, encoding: .utf8) else { return nil }
 
