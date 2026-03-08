@@ -20,11 +20,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusBar: StatusBarController!
     private var conversationLoop: ConversationLoop!
     private var mainWindow: NSWindow?
-    private var globalHotkeyMonitor: Any?
-    // Carbon hotkeys: Cmd+. (stop speech), Cmd+/ (toggle listening)
+    // Carbon hotkeys: Cmd+. (stop speech), Cmd+/ (toggle mute)
     private var carbonEventHandler: EventHandlerRef?
-    private var carbonHotKeyRef: EventHotKeyRef?
-    private var carbonListenHotKeyRef: EventHotKeyRef?
+    private var carbonStopHotKeyRef: EventHotKeyRef?
+    private var carbonMuteHotKeyRef: EventHotKeyRef?
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false  // Keep running in menubar when window is closed
@@ -44,7 +43,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Register global hotkeys
-        registerGlobalHotkeys()
+        registerCarbonHotkeys()
+        print("Magpi: Global hotkeys: ⌘/ = toggle mute, ⌘. = stop speech")
 
         print("Magpi: Starting up...")
 
@@ -91,13 +91,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         conversationLoop?.stop()
         statusBar?.agentStore.stop()
-        if let monitor = globalHotkeyMonitor {
-            NSEvent.removeMonitor(monitor)
-        }
-        if let ref = carbonHotKeyRef {
+        if let ref = carbonStopHotKeyRef {
             UnregisterEventHotKey(ref)
         }
-        if let ref = carbonListenHotKeyRef {
+        if let ref = carbonMuteHotKeyRef {
             UnregisterEventHotKey(ref)
         }
         if let handler = carbonEventHandler {
@@ -147,37 +144,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         mainWindow = window
     }
 
-    // MARK: - Global Hotkeys
-
-    private func registerGlobalHotkeys() {
-        // NSEvent monitor for Alt+S, Alt+B (works when app is not focused)
-        globalHotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-
-            // Alt+S (keyCode 1 = 's') → Record toggle
-            if event.keyCode == 1 && flags == .option {
-                DispatchQueue.main.async {
-                    self?.conversationLoop?.toggleRecording()
-                }
-                return
-            }
-
-            // Alt+B (keyCode 11 = 'b') → Barge-in toggle
-            if event.keyCode == 11 && flags == .option {
-                DispatchQueue.main.async {
-                    guard let loop = self?.conversationLoop else { return }
-                    loop.bargeInEnabled.toggle()
-                    print("Magpi: Barge-in \(loop.bargeInEnabled ? "enabled" : "disabled")")
-                }
-                return
-            }
-        }
-
-        // Carbon global hotkeys — work everywhere, even when not focused
-        registerCarbonHotkeys()
-
-        print("Magpi: Global hotkeys: ⌘/ = toggle listening, ⌘. = stop speech, ⌥S = record toggle")
-    }
+    // MARK: - Global Hotkeys (Carbon)
 
     private func registerCarbonHotkeys() {
         var eventType = EventTypeSpec(
@@ -189,7 +156,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let userData = userData else { return OSStatus(eventNotHandledErr) }
             let appDelegate = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
 
-            // Read which hotkey was pressed
             var hotKeyID = EventHotKeyID()
             GetEventParameter(event,
                               EventParamName(kEventParamDirectObject),
@@ -202,12 +168,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 case 1: // Cmd+. → stop speech
                     appDelegate.conversationLoop?.stopSpeech()
                     print("Magpi: ⌘. Stop speech")
-                case 2: // Cmd+/ → toggle listening
+                case 2: // Cmd+/ → toggle mute
                     guard let loop = appDelegate.conversationLoop else { return }
-                    loop.isEnabled.toggle()
-                    let status = loop.isEnabled ? "ON — listening" : "OFF — push-to-talk only"
-                    print("Magpi: ⌘/ Listening \(status)")
-                    loop.transcript.addLog(loop.isEnabled ? "🎙️ Listening enabled (⌘/)" : "🔇 Listening disabled (⌘/)")
+                    loop.isMuted.toggle()
+                    let status = loop.isMuted ? "MUTED" : "UNMUTED — listening"
+                    print("Magpi: ⌘/ \(status)")
+                    loop.transcript.addLog(loop.isMuted ? "🔇 Muted (⌘/)" : "🎙️ Unmuted (⌘/)")
                 default:
                     break
                 }
@@ -223,19 +189,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         // Cmd+. (key code 47 = period)
-        let stopID = EventHotKeyID(signature: OSType(0x4D414750), id: 1) // "MAGP"
+        let stopID = EventHotKeyID(signature: OSType(0x4D414750), id: 1)
         RegisterEventHotKey(
             47, UInt32(cmdKey), stopID,
             GetApplicationEventTarget(), 0,
-            &carbonHotKeyRef
+            &carbonStopHotKeyRef
         )
 
         // Cmd+/ (key code 44 = slash)
-        let listenID = EventHotKeyID(signature: OSType(0x4D414750), id: 2)
+        let muteID = EventHotKeyID(signature: OSType(0x4D414750), id: 2)
         RegisterEventHotKey(
-            44, UInt32(cmdKey), listenID,
+            44, UInt32(cmdKey), muteID,
             GetApplicationEventTarget(), 0,
-            &carbonListenHotKeyRef
+            &carbonMuteHotKeyRef
         )
     }
 

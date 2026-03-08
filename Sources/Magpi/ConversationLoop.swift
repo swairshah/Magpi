@@ -48,39 +48,9 @@ final class ConversationLoop: ObservableObject {
     @Published private(set) var state: State = .idle
     @Published private(set) var audioLevel: Float = 0
     @Published private(set) var isAgentRunning = false
-    /// When true, VAD continuously listens for speech. Toggle with ⌘/.
-    /// When false, use Record (⌥S) for push-to-talk.
-    @Published var isEnabled = false
 
-    /// Text-only mode: voice input works (VAD → STT), but responses are
-    /// plain text in the chat — no TTS output. The broker is not started
-    /// so pi-tts has nowhere to send speak commands.
-    @Published var textOnlyMode = false {
-        didSet {
-            if textOnlyMode {
-                // Stop broker + any playing speech
-                audioPlayer.stop()
-                clearSpeechQueue()
-                piBridge.stopBroker()
-                if state == .speaking { state = .idle }
-                print("Magpi: Text-only mode ON (TTS disabled)")
-                transcript.addLog("🔇 Text-only mode — responses as text")
-            } else {
-                // Restart broker for TTS
-                do {
-                    try piBridge.startBroker()
-                    print("Magpi: Text-only mode OFF (TTS enabled)")
-                    transcript.addLog("🔊 Voice mode — responses spoken")
-                } catch {
-                    print("Magpi: Failed to restart broker: \(error)")
-                }
-            }
-        }
-    }
-
-    /// When true, VAD detects speech during TTS playback and interrupts it.
-    /// Turn off when not wearing headphones (TTS bleeds into mic).
-    @Published var bargeInEnabled = true
+    /// When false (muted), mic input is ignored. Toggle with ⌘/.
+    @Published var isMuted = true
 
     // Components
     private let audioCapture = AudioCaptureSession()
@@ -126,9 +96,6 @@ final class ConversationLoop: ObservableObject {
 
             // Smart Turn disabled — model expects mel spectrogram input (input_features [B,80,800])
             // not raw audio. Need to implement mel spectrogram extraction first.
-            // For now, rely on VAD silence detection + timeout for turn detection.
-            // print("Magpi: Loading Smart Turn...")
-            // smartTurn = try SmartTurnDetector()
             print("Magpi: Smart Turn disabled (needs mel spectrogram preprocessing)")
 
             // Find STT model
@@ -139,21 +106,16 @@ final class ConversationLoop: ObservableObject {
                 print("Magpi: Warning — no STT model found")
             }
 
-            // Start TTS + broker (skip in text-only mode)
-            if !textOnlyMode {
-                if !(await ttsEngine.checkHealth()) {
-                    print("Magpi: Starting TTS server...")
-                    try await ttsEngine.startServer()
-                } else {
-                    ttsEngine.isServerRunning = true
-                    print("Magpi: TTS server already running (Loqui?)")
-                }
-
-                // Start broker (receives speak commands from pi-talk extension)
-                try piBridge.startBroker()
+            // Start TTS + broker
+            if !(await ttsEngine.checkHealth()) {
+                print("Magpi: Starting TTS server...")
+                try await ttsEngine.startServer()
             } else {
-                print("Magpi: Text-only mode — skipping TTS/broker")
+                ttsEngine.isServerRunning = true
+                print("Magpi: TTS server already running (Loqui?)")
             }
+
+            try piBridge.startBroker()
 
             // Start Pi RPC conversation agent
             try startConversationAgent()
@@ -167,7 +129,7 @@ final class ConversationLoop: ObservableObject {
             // Start audio capture (with voice processing / AEC)
             try audioCapture.start()
 
-            // Attach the audio player to the same engine so that
+            // Attach the audio player to the shared engine so that
             // TTS playback goes through the voice-processed output
             // and macOS can subtract it from the mic input (AEC).
             if let engine = audioCapture.engine {
@@ -175,6 +137,9 @@ final class ConversationLoop: ObservableObject {
             }
 
             state = .idle
+
+            // Auto-unmute on start
+            isMuted = false
 
             print("Magpi: Conversation loop started ✓")
         } catch {
@@ -361,18 +326,13 @@ final class ConversationLoop: ObservableObject {
                 transcript.logTurn(role: "ASSISTANT", text: last.text)
             }
             transcript.endAssistantMessage()
-            // In text-only mode, go straight to idle (no TTS to wait for).
-            // In voice mode, wait briefly for speak requests to arrive.
+            // Wait briefly for speak requests to arrive via broker.
             if state == .waiting {
-                if textOnlyMode {
-                    state = .idle
-                } else {
-                    Task {
-                        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
-                        if state == .waiting {
-                            transcript.addLog("No speech queued → idle")
-                            state = .idle
-                        }
+                Task {
+                    try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
+                    if state == .waiting {
+                        transcript.addLog("No speech queued → idle")
+                        state = .idle
                     }
                 }
             }
@@ -419,58 +379,10 @@ final class ConversationLoop: ObservableObject {
 
     // MARK: - Audio Processing
 
-    /// Whether recording toggle is active (Alt+S).
-    @Published private(set) var isRecordToggleActive = false
-
-    // MARK: - Record Toggle (Alt+S)
-
-    /// Toggle recording on/off. Press once to start listening,
-    /// press again to stop and transcribe.
-    func toggleRecording() {
-        if isRecordToggleActive {
-            // Stop recording → transcribe
-            isRecordToggleActive = false
-            print("Magpi: Record toggle OFF → transcribing")
-            transcript.addLog("Record toggle off → transcribing")
-
-            if state == .listening || state == .turnCheck {
-                // Force transcription immediately
-                Task { await transcribe() }
-            }
-        } else {
-            // Start recording
-            isRecordToggleActive = true
-
-            // Stop any current TTS
-            if state == .speaking {
-                audioPlayer.stop()
-                clearSpeechQueue()
-                if piRPC.isStreaming {
-                    piRPC.abort()
-                }
-            }
-
-            sileroVAD?.reset()
-            audioBuffer.reset()
-            bargeInChunkCount = 0
-            state = .listening
-            print("Magpi: Record toggle ON → LISTENING")
-            transcript.addLog("Record toggle on → listening")
-        }
-    }
-
-    // MARK: - Audio Processing
-
     private func processAudioFrame(_ samples: [Float]) {
-        guard isEnabled, let vad = sileroVAD else { return }
+        guard !isMuted, let vad = sileroVAD else { return }
 
         frameCount += 1
-
-        // When barge-in is disabled, skip VAD during TTS playback
-        // to prevent the speaker audio from triggering false detection.
-        if state == .speaking && !bargeInEnabled {
-            return
-        }
 
         // Always accumulate audio when listening
         if state == .listening || state == .turnCheck {
@@ -507,9 +419,7 @@ final class ConversationLoop: ObservableObject {
             }
 
         case .listening:
-            if event == .turnSilence && !isRecordToggleActive {
-                // Only auto-detect turn when not in record toggle mode.
-                // In record toggle mode, user presses Alt+S again to stop.
+            if event == .turnSilence {
                 state = .turnCheck
                 turnCheckRetries = 0
                 print("Magpi: → TURN_CHECK")
@@ -517,8 +427,8 @@ final class ConversationLoop: ObservableObject {
             }
 
         case .speaking:
-            // Barge-in (only when enabled — requires headphones)
-            if bargeInEnabled, event == .speechContinue {
+            // Barge-in: user speaks during TTS → interrupt and listen
+            if event == .speechContinue {
                 bargeInChunkCount += 1
                 if bargeInChunkCount >= Constants.bargeInMinChunks {
                     print("Magpi: Barge-in detected!")
@@ -539,7 +449,7 @@ final class ConversationLoop: ObservableObject {
             }
 
         case .waiting:
-            // User might speak again while waiting for Pi response
+            // User speaks while waiting for Pi → interrupt and listen
             if event == .speechContinue {
                 bargeInChunkCount += 1
                 if bargeInChunkCount >= Constants.bargeInMinChunks {
@@ -577,19 +487,18 @@ final class ConversationLoop: ObservableObject {
             let isComplete = try smartTurn.isTurnComplete(audio: audio)
 
             if isComplete {
-                print("Magpi: Turn complete → transcribing")
                 await transcribe()
-            } else {
+            } else if turnCheckRetries < Constants.smartTurnMaxRetries {
                 turnCheckRetries += 1
-                if turnCheckRetries >= Constants.smartTurnMaxRetries {
-                    print("Magpi: Turn check max retries → transcribing anyway")
-                    await transcribe()
-                } else {
-                    print("Magpi: Turn not complete (retry \(turnCheckRetries)/\(Constants.smartTurnMaxRetries))")
-                    state = .listening
-                    sileroVAD?.resetIterator()
-                    try? await Task.sleep(nanoseconds: UInt64(Constants.smartTurnRetryDelayMs) * 1_000_000)
-                }
+                state = .listening
+                print("Magpi: Turn not complete, retry \(turnCheckRetries)")
+
+                // Give a bit more silence, then re-check
+                sileroVAD?.resetIterator()
+                try? await Task.sleep(nanoseconds: UInt64(Constants.smartTurnRetryDelayMs) * 1_000_000)
+            } else {
+                print("Magpi: Max turn retries — transcribing anyway")
+                await transcribe()
             }
         } catch {
             print("Magpi: Smart Turn error: \(error) — transcribing anyway")
@@ -605,7 +514,6 @@ final class ConversationLoop: ObservableObject {
             return
         }
 
-        isRecordToggleActive = false  // Always reset toggle when transcribing
         state = .transcribing
         let duration = String(format: "%.1f", audioBuffer.duration)
         print("Magpi: → TRANSCRIBING (\(duration)s of audio)")
@@ -638,8 +546,6 @@ final class ConversationLoop: ObservableObject {
 
             if piRPC.isRunning {
                 if piRPC.isStreaming {
-                    // Agent is busy — steer with the new message so it arrives immediately.
-                    // The agent can then decide to stop or continue based on content.
                     piRPC.steer(text)
                     transcript.addLog("↪ Steered agent with new input")
                 } else {
@@ -657,7 +563,7 @@ final class ConversationLoop: ObservableObject {
 
             // Timeout
             Task {
-                try? await Task.sleep(nanoseconds: 60_000_000_000) // 60s for RPC (may use tools)
+                try? await Task.sleep(nanoseconds: 60_000_000_000) // 60s
                 if state == .waiting {
                     print("Magpi: Response timeout, returning to idle")
                     state = .idle
@@ -675,23 +581,16 @@ final class ConversationLoop: ObservableObject {
     // MARK: - Speech (TTS) Handling
 
     private func handleSpeakRequest(_ request: PiBridge.SpeakRequest) {
-        // In text-only mode, ignore speak requests — responses show as text in chat
-        guard !textOnlyMode else { return }
-
         speechQueueLock.lock()
         speechQueue.append((text: request.text, voice: request.voice))
         speechQueueLock.unlock()
 
-        // If we're waiting or idle, start speaking
         if state == .waiting || state == .idle {
             Task { await processNextSpeech() }
         }
     }
 
     private func handleStopRequest() {
-        // Broker stop = just stop TTS playback (e.g. pi-tts clears old speech
-        // when a new user message starts). Do NOT abort the agent — the stop
-        // is for audio only.
         audioPlayer.stop()
         clearSpeechQueue()
         if state == .speaking {
@@ -706,7 +605,6 @@ final class ConversationLoop: ObservableObject {
         if state == .speaking {
             state = .idle
         }
-        // Also abort the agent if it's still streaming
         if piRPC.isStreaming {
             piRPC.abort()
             transcript.addLog("⏹ Stopped (Cmd+.)")
@@ -718,8 +616,6 @@ final class ConversationLoop: ObservableObject {
         guard !speechQueue.isEmpty else {
             speechQueueLock.unlock()
             if state == .speaking {
-                // Reset VAD after speaking — its state may be contaminated
-                // from TTS bleed that occurred before we started skipping frames
                 sileroVAD?.reset()
                 state = .idle
                 print("Magpi: → IDLE (speech queue empty)")

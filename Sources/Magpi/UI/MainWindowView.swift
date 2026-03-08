@@ -1,12 +1,10 @@
 import SwiftUI
 
 /// Main application window — sidebar with agents + conversation area.
-/// Inspired by Graphone's session sidebar and PiTalk's session cards.
 struct MainWindowView: View {
     @ObservedObject var conversationLoop: ConversationLoop
     @ObservedObject var agentStore: AgentStore
     @State private var selectedTab: Tab = .agents
-    @State private var sidebarCollapsed = false
     /// nil = show Magpi manager conversation, otherwise show spoke agent's session
     @State private var selectedAgentPid: Int32? = nil
 
@@ -30,13 +28,11 @@ struct MainWindowView: View {
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            // Voice status header
             voiceStatusHeader
                 .padding(12)
 
             Divider()
 
-            // Tab picker
             Picker("", selection: $selectedTab) {
                 ForEach(Tab.allCases, id: \.self) { tab in
                     Text(tab.rawValue).tag(tab)
@@ -46,7 +42,6 @@ struct MainWindowView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
 
-            // Tab content
             switch selectedTab {
             case .agents:
                 agentSidebar
@@ -61,7 +56,6 @@ struct MainWindowView: View {
     private var voiceStatusHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                // State indicator with bird icon
                 stateIcon
                     .frame(width: 32, height: 32)
 
@@ -74,75 +68,31 @@ struct MainWindowView: View {
                 }
 
                 Spacer()
-
-                // Recording indicator
-                if conversationLoop.isRecordToggleActive {
-                    HStack(spacing: 4) {
-                        Circle().fill(.red).frame(width: 6, height: 6)
-                        Text("REC").font(.caption2.weight(.bold)).foregroundColor(.red)
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.red.opacity(0.1)))
-                }
             }
 
-            // Controls row
+            // Single control: mute/unmute
             HStack(spacing: 8) {
-                // Record toggle
                 Button {
-                    conversationLoop.toggleRecording()
+                    conversationLoop.isMuted.toggle()
                 } label: {
                     Label(
-                        conversationLoop.isRecordToggleActive ? "Stop" : "Record",
-                        systemImage: conversationLoop.isRecordToggleActive ? "stop.fill" : "mic.fill"
+                        conversationLoop.isMuted ? "Muted" : "Listening",
+                        systemImage: conversationLoop.isMuted ? "mic.slash" : "mic.fill"
                     )
                     .font(.caption.weight(.medium))
                 }
                 .buttonStyle(VoiceControlButtonStyle(
-                    tint: conversationLoop.isRecordToggleActive ? .red : .blue
+                    tint: conversationLoop.isMuted ? .secondary : .blue
                 ))
-                .keyboardShortcut("s", modifiers: .option)
-
-                // Text-only / Voice toggle
-                Button {
-                    conversationLoop.textOnlyMode.toggle()
-                } label: {
-                    Label(
-                        conversationLoop.textOnlyMode ? "Text" : "Voice",
-                        systemImage: conversationLoop.textOnlyMode ? "text.bubble" : "speaker.wave.2.fill"
-                    )
-                    .font(.caption.weight(.medium))
-                }
-                .buttonStyle(VoiceControlButtonStyle(
-                    tint: conversationLoop.textOnlyMode ? .orange : .green
-                ))
-                .keyboardShortcut("t", modifiers: .option)
-                .help("⌥T: Toggle text-only responses (no TTS)")
+                .help("⌘/ Toggle mute")
 
                 Spacer()
-
-                // Listening toggle (⌘/)
-                Button {
-                    conversationLoop.isEnabled.toggle()
-                } label: {
-                    Label(
-                        conversationLoop.isEnabled ? "Listening" : "Paused",
-                        systemImage: conversationLoop.isEnabled ? "mic.fill" : "mic.slash"
-                    )
-                    .font(.caption.weight(.medium))
-                }
-                .buttonStyle(VoiceControlButtonStyle(
-                    tint: conversationLoop.isEnabled ? .blue : .secondary
-                ))
-                .help("⌘/ Toggle continuous listening")
             }
         }
     }
 
     @ViewBuilder
     private var stateIcon: some View {
-        // Use the full-res 1024px source images for the sidebar (sharp at any size)
         let srcName: String = {
             switch conversationLoop.state {
             case .speaking: return "magpi_saying_1024"
@@ -179,7 +129,6 @@ struct MainWindowView: View {
 
     private var agentSidebar: some View {
         VStack(spacing: 0) {
-            // Agent summary
             HStack(spacing: 6) {
                 Circle()
                     .fill(agentStore.isDaemonRunning ? Color.green : Color.red)
@@ -236,7 +185,6 @@ struct MainWindowView: View {
 
                         Divider().padding(.vertical, 2)
 
-                        // Spoke agents
                         ForEach(agentStore.agents) { agent in
                             Button {
                                 selectedAgentPid = agent.pid
@@ -323,6 +271,7 @@ struct MainWindowView: View {
            let agent = agentStore.agents.first(where: { $0.pid == pid }) {
             AgentSessionView(agent: agent, agentStore: agentStore)
         } else {
+            // Default: show Magpi manager conversation (no click needed)
             ConversationView(
                 store: conversationLoop.transcript,
                 onSend: { text in
@@ -385,7 +334,6 @@ struct SidebarAgentRow: View {
                     .foregroundStyle(.tertiary)
             }
 
-            // Session title (first user message) — like Graphone
             if let title = agent.sessionTitle {
                 Text(title)
                     .font(.caption)
@@ -411,7 +359,6 @@ struct SidebarAgentRow: View {
                         .foregroundStyle(.tertiary)
                 }
 
-                // Show terminal/mux info for disambiguation
                 if let label = agent.disambiguationLabel {
                     Text(label)
                         .font(.caption2.monospaced())
@@ -474,7 +421,6 @@ struct ConversationView: View {
         VStack(spacing: 0) {
             // Toolbar
             HStack(spacing: 8) {
-                // New session button
                 Button {
                     onNewSession?()
                 } label: {
@@ -485,7 +431,6 @@ struct ConversationView: View {
                 .foregroundColor(.secondary)
                 .help("Start a new conversation (clears Pi context)")
 
-                // Clear history button
                 Button {
                     onClearHistory?()
                 } label: {
@@ -521,7 +466,6 @@ struct ConversationView: View {
 
             Divider()
 
-            // Input bar
             inputBar
                 .padding(12)
         }
