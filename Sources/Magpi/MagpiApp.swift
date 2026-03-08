@@ -20,10 +20,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusBar: StatusBarController!
     private var conversationLoop: ConversationLoop!
     private var mainWindow: NSWindow?
-    // Carbon hotkeys: Cmd+. (stop speech), Cmd+/ (toggle mute)
-    private var carbonEventHandler: EventHandlerRef?
-    private var carbonStopHotKeyRef: EventHotKeyRef?
-    private var carbonMuteHotKeyRef: EventHotKeyRef?
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false  // Keep running in menubar when window is closed
@@ -42,10 +38,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.applicationIconImage = icon
         }
 
-        // Register global hotkeys
-        registerCarbonHotkeys()
-        print("Magpi: Global hotkeys: ⌘/ = toggle mute, ⌘. = stop speech")
-
         print("Magpi: Starting up...")
 
         // Create conversation loop
@@ -61,6 +53,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusBar.onQuit = {
             NSApp.terminate(nil)
         }
+
+        // Register global keyboard shortcuts
+        setupKeyboardShortcuts()
 
         // Check models and start
         let models = ModelManager.shared
@@ -91,15 +86,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         conversationLoop?.stop()
         statusBar?.agentStore.stop()
-        if let ref = carbonStopHotKeyRef {
-            UnregisterEventHotKey(ref)
-        }
-        if let ref = carbonMuteHotKeyRef {
-            UnregisterEventHotKey(ref)
-        }
-        if let handler = carbonEventHandler {
-            RemoveEventHandler(handler)
-        }
+        KeyboardShortcutManager.shared.unregisterAll()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -144,61 +131,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         mainWindow = window
     }
 
-    // MARK: - Global Hotkeys (Carbon)
+    // MARK: - Global Keyboard Shortcuts
 
-    private func registerCarbonHotkeys() {
-        var eventType = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
+    private func setupKeyboardShortcuts() {
+        let manager = KeyboardShortcutManager.shared
 
-        let handler: EventHandlerUPP = { _, event, userData -> OSStatus in
-            guard let userData = userData else { return OSStatus(eventNotHandledErr) }
-            let appDelegate = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
-
-            var hotKeyID = EventHotKeyID()
-            GetEventParameter(event,
-                              EventParamName(kEventParamDirectObject),
-                              EventParamType(typeEventHotKeyID),
-                              nil, MemoryLayout<EventHotKeyID>.size, nil,
-                              &hotKeyID)
-
-            DispatchQueue.main.async {
-                switch hotKeyID.id {
-                case 1: // Cmd+. → stop speech
-                    appDelegate.conversationLoop?.stopSpeech()
-                    print("Magpi: ⌘. Stop speech")
-                case 2: // Cmd+/ → toggle mute
-                    appDelegate.conversationLoop?.isMuted.toggle()
-                default:
-                    break
-                }
+        manager.setHandler(for: .stopSpeech) { [weak self] in
+            Task { @MainActor in
+                self?.conversationLoop?.stopSpeech()
             }
-            return noErr
         }
 
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        InstallEventHandler(
-            GetApplicationEventTarget(),
-            handler, 1, &eventType,
-            selfPtr, &carbonEventHandler
-        )
+        manager.setHandler(for: .toggleMute) { [weak self] in
+            Task { @MainActor in
+                self?.conversationLoop?.isMuted.toggle()
+            }
+        }
 
-        // Cmd+. (key code 47 = period)
-        let stopID = EventHotKeyID(signature: OSType(0x4D414750), id: 1)
-        RegisterEventHotKey(
-            47, UInt32(cmdKey), stopID,
-            GetApplicationEventTarget(), 0,
-            &carbonStopHotKeyRef
-        )
+        manager.setHandler(for: .showWindow) { [weak self] in
+            Task { @MainActor in
+                self?.showMainWindow()
+            }
+        }
 
-        // Cmd+/ (key code 44 = slash)
-        let muteID = EventHotKeyID(signature: OSType(0x4D414750), id: 2)
-        RegisterEventHotKey(
-            44, UInt32(cmdKey), muteID,
-            GetApplicationEventTarget(), 0,
-            &carbonMuteHotKeyRef
-        )
+        manager.registerAll()
+
+        // Log active shortcuts
+        let shortcuts = ShortcutAction.allCases.compactMap { action -> String? in
+            guard let binding = manager.bindings[action] else { return nil }
+            return "\(binding.displayString) = \(action.displayName)"
+        }
+        print("Magpi: Global hotkeys: \(shortcuts.joined(separator: ", "))")
     }
 
     // MARK: - Private

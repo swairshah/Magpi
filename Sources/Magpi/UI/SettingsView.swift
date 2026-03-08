@@ -17,6 +17,11 @@ struct SettingsView: View {
                     Label("General", systemImage: "gear")
                 }
             
+            shortcutsTab
+                .tabItem {
+                    Label("Shortcuts", systemImage: "keyboard")
+                }
+            
             modelsTab
                 .tabItem {
                     Label("Models", systemImage: "brain")
@@ -203,6 +208,37 @@ struct SettingsView: View {
                 Text("VAD runs during TTS playback. If speech is detected, playback stops and Magpi starts listening again.")
                     .font(.caption)
                     .foregroundColor(.secondary)
+            }
+        }
+    }
+    
+    // MARK: - Shortcuts Tab
+    
+    private var shortcutsTab: some View {
+        Form {
+            Section("Global Keyboard Shortcuts") {
+                Text("These shortcuts work even when Magpi is not focused.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                ForEach(ShortcutAction.allCases, id: \.self) { action in
+                    LabeledContent(action.displayName) {
+                        ShortcutRecorderView(
+                            action: action,
+                            manager: KeyboardShortcutManager.shared
+                        )
+                    }
+                }
+            }
+            
+            Section {
+                HStack {
+                    Spacer()
+                    Button("Reset to Defaults") {
+                        KeyboardShortcutManager.shared.resetAllToDefaults()
+                    }
+                    .disabled(!KeyboardShortcutManager.shared.hasCustomBindings)
+                }
             }
         }
     }

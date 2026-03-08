@@ -34,6 +34,12 @@ final class StatusBarController {
         rebuildMenu()
     }
     
+    /// Format a shortcut binding as a menu item suffix, e.g. " (⌘/)"
+    private func shortcutLabel(for action: ShortcutAction) -> String {
+        guard let binding = KeyboardShortcutManager.shared.bindings[action] else { return "" }
+        return " (\(binding.displayString))"
+    }
+
     private func rebuildMenu() {
         let menu = NSMenu()
         
@@ -47,21 +53,22 @@ final class StatusBarController {
         
         // Mute/unmute toggle
         let muted = conversationLoop?.isMuted ?? true
-        let muteItem = NSMenuItem(
-            title: muted ? "Unmute (⌘/)" : "Mute (⌘/)",
-            action: #selector(toggleMute),
-            keyEquivalent: ""
-        )
+        let muteTitle = (muted ? "Unmute" : "Mute") + shortcutLabel(for: .toggleMute)
+        let muteItem = NSMenuItem(title: muteTitle, action: #selector(toggleMute), keyEquivalent: "")
         muteItem.target = self
         menu.addItem(muteItem)
 
+        // Stop speech
+        let stopTitle = "Stop Speech" + shortcutLabel(for: .stopSpeech)
+        let stopItem = NSMenuItem(title: stopTitle, action: #selector(stopSpeech), keyEquivalent: "")
+        stopItem.target = self
+        menu.addItem(stopItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         // Show main window
-        let windowItem = NSMenuItem(
-            title: "Show Window",
-            action: #selector(showWindow),
-            keyEquivalent: "1"
-        )
-        windowItem.keyEquivalentModifierMask = [.command]
+        let windowTitle = "Show Window" + shortcutLabel(for: .showWindow)
+        let windowItem = NSMenuItem(title: windowTitle, action: #selector(showWindow), keyEquivalent: "")
         windowItem.target = self
         menu.addItem(windowItem)
 
@@ -75,11 +82,6 @@ final class StatusBarController {
         transcriptItem.keyEquivalentModifierMask = [.command]
         transcriptItem.target = self
         menu.addItem(transcriptItem)
-
-        // Stop speech
-        let stopItem = NSMenuItem(title: "Stop Speech (⌘.)", action: #selector(stopSpeech), keyEquivalent: "")
-        stopItem.target = self
-        menu.addItem(stopItem)
         
         menu.addItem(NSMenuItem.separator())
         
@@ -124,6 +126,13 @@ final class StatusBarController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] state in
                 self?.updateIcon(for: state)
+                self?.rebuildMenu()
+            }
+            .store(in: &cancellables)
+
+        conversationLoop?.$isMuted
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
                 self?.rebuildMenu()
             }
             .store(in: &cancellables)
@@ -188,7 +197,6 @@ final class StatusBarController {
 
     @objc private func toggleMute() {
         conversationLoop?.isMuted.toggle()
-        rebuildMenu()
     }
     
     @objc private func stopSpeech() {
