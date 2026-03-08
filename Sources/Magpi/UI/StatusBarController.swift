@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import Combine
 
-/// Manages the macOS menu bar icon and menu.
+/// Manages the macOS menu bar icon and popover.
 @MainActor
 final class StatusBarController {
     
@@ -10,10 +10,14 @@ final class StatusBarController {
     var onQuit: (() -> Void)?
     
     private var statusItem: NSStatusItem!
+    private var popover: NSPopover!
     private var cancellables = Set<AnyCancellable>()
     private weak var conversationLoop: ConversationLoop?
     private var transcriptPanel: TranscriptPanelController?
     let agentStore = AgentStore()
+    
+    /// Event monitor to close popover when clicking outside.
+    private var eventMonitor: Any?
     
     init(conversationLoop: ConversationLoop) {
         self.conversationLoop = conversationLoop
@@ -23,6 +27,7 @@ final class StatusBarController {
         )
         agentStore.start()
         setupMenuBar()
+        setupPopover()
         observeState()
     }
     
@@ -31,84 +36,104 @@ final class StatusBarController {
     private func setupMenuBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         updateIcon(for: .idle)
-        rebuildMenu()
+        
+        if let button = statusItem.button {
+            button.action = #selector(togglePopover)
+            button.target = self
+            // Right-click shows the fallback NSMenu
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        }
     }
     
-    /// Format a shortcut binding as a menu item suffix, e.g. " (⌘/)"
-    private func shortcutLabel(for action: ShortcutAction) -> String {
-        guard let binding = KeyboardShortcutManager.shared.bindings[action] else { return "" }
-        return " (\(binding.displayString))"
+    private func setupPopover() {
+        guard let loop = conversationLoop else { return }
+        
+        let popoverView = MenuBarPopoverView(
+            conversationLoop: loop,
+            agentStore: agentStore,
+            onShowWindow: { [weak self] in
+                self?.closePopover()
+                self?.onShowSettings?()
+            },
+            onQuit: { [weak self] in
+                self?.closePopover()
+                self?.onQuit?()
+            }
+        )
+        
+        let hostingController = NSHostingController(rootView: popoverView)
+        
+        popover = NSPopover()
+        popover.contentSize = NSSize(width: 320, height: 400)
+        popover.behavior = .transient
+        popover.contentViewController = hostingController
     }
-
-    private func rebuildMenu() {
+    
+    @objc private func togglePopover(_ sender: NSStatusBarButton) {
+        let event = NSApp.currentEvent
+        
+        // Right-click → show simple context menu
+        if event?.type == .rightMouseUp {
+            showContextMenu()
+            return
+        }
+        
+        // Left-click → toggle popover
+        if popover.isShown {
+            closePopover()
+        } else {
+            showPopover()
+        }
+    }
+    
+    private func showPopover() {
+        guard let button = statusItem.button else { return }
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        
+        // Close when clicking outside
+        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            self?.closePopover()
+        }
+    }
+    
+    private func closePopover() {
+        popover.performClose(nil)
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+            eventMonitor = nil
+        }
+    }
+    
+    /// Fallback context menu on right-click.
+    private func showContextMenu() {
         let menu = NSMenu()
         
-        // Status
-        let state = conversationLoop?.state ?? .idle
-        let statusLine = NSMenuItem(title: state.displayName, action: nil, keyEquivalent: "")
-        statusLine.isEnabled = false
-        menu.addItem(statusLine)
-        
-        menu.addItem(NSMenuItem.separator())
-        
-        // Mute/unmute toggle
-        let muted = conversationLoop?.isMuted ?? true
-        let muteTitle = (muted ? "Unmute" : "Mute") + shortcutLabel(for: .toggleMute)
-        let muteItem = NSMenuItem(title: muteTitle, action: #selector(toggleMute), keyEquivalent: "")
+        let muteItem = NSMenuItem(
+            title: (conversationLoop?.isMuted ?? true) ? "Unmute" : "Mute",
+            action: #selector(toggleMute),
+            keyEquivalent: ""
+        )
         muteItem.target = self
         menu.addItem(muteItem)
-
-        // Stop speech
-        let stopTitle = "Stop Speech" + shortcutLabel(for: .stopSpeech)
-        let stopItem = NSMenuItem(title: stopTitle, action: #selector(stopSpeech), keyEquivalent: "")
+        
+        let stopItem = NSMenuItem(title: "Stop Speech", action: #selector(stopSpeech), keyEquivalent: "")
         stopItem.target = self
         menu.addItem(stopItem)
-
+        
         menu.addItem(NSMenuItem.separator())
-
-        // Show main window
-        let windowTitle = "Show Window" + shortcutLabel(for: .showWindow)
-        let windowItem = NSMenuItem(title: windowTitle, action: #selector(showWindow), keyEquivalent: "")
+        
+        let windowItem = NSMenuItem(title: "Show Window", action: #selector(showWindow), keyEquivalent: "")
         windowItem.target = self
         menu.addItem(windowItem)
-
-        // Floating transcript panel
+        
         let transcriptVisible = transcriptPanel?.isVisible ?? false
         let transcriptItem = NSMenuItem(
             title: transcriptVisible ? "Hide Transcript" : "Show Transcript",
             action: #selector(toggleTranscript),
-            keyEquivalent: "t"
+            keyEquivalent: ""
         )
-        transcriptItem.keyEquivalentModifierMask = [.command]
         transcriptItem.target = self
         menu.addItem(transcriptItem)
-        
-        menu.addItem(NSMenuItem.separator())
-        
-        // Agent status
-        let agentRunning = conversationLoop?.isAgentRunning ?? false
-        let agentStatus = NSMenuItem(
-            title: "Manager: \(agentRunning ? "Running ✓" : "Not running ✗")",
-            action: nil, keyEquivalent: ""
-        )
-        agentStatus.isEnabled = false
-        menu.addItem(agentStatus)
-
-        let s = agentStore.summary
-        let spokeStatus = NSMenuItem(
-            title: "Agents: \(s.total) (\(s.running) running, \(s.waitingInput) waiting)",
-            action: nil, keyEquivalent: ""
-        )
-        spokeStatus.isEnabled = false
-        menu.addItem(spokeStatus)
-
-        let models = ModelManager.shared
-        let modelStatus = NSMenuItem(
-            title: "Models: VAD \(models.sileroVADReady ? "✓" : "✗") | Turn \(models.smartTurnReady ? "✓" : "✗") | STT \(models.sttModelReady ? "✓" : "✗") | TTS \(models.ttsReady ? "✓" : "✗")",
-            action: nil, keyEquivalent: ""
-        )
-        modelStatus.isEnabled = false
-        menu.addItem(modelStatus)
         
         menu.addItem(NSMenuItem.separator())
         
@@ -116,7 +141,12 @@ final class StatusBarController {
         quitItem.target = self
         menu.addItem(quitItem)
         
-        self.statusItem.menu = menu
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)
+        // Clear the menu after showing so left-click goes back to popover
+        DispatchQueue.main.async { [weak self] in
+            self?.statusItem.menu = nil
+        }
     }
     
     // MARK: - State Observation
@@ -126,21 +156,13 @@ final class StatusBarController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] state in
                 self?.updateIcon(for: state)
-                self?.rebuildMenu()
             }
             .store(in: &cancellables)
-
+        
         conversationLoop?.$isMuted
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.rebuildMenu()
-            }
-            .store(in: &cancellables)
-
-        agentStore.$summary
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.rebuildMenu()
+            .sink { [weak self] muted in
+                self?.updateIcon(for: self?.conversationLoop?.state ?? .idle)
             }
             .store(in: &cancellables)
     }

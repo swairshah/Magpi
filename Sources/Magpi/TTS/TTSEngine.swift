@@ -121,7 +121,7 @@ final class TTSEngine {
     // MARK: - Synthesis
     
     /// Synthesize text to raw PCM audio (s16le, 24kHz, mono).
-    func synthesize(text: String, voice: String? = nil) async throws -> Data {
+    func synthesize(text: String, voice: String? = nil, speed: Double = 1.0) async throws -> Data {
         guard isServerRunning else {
             throw TTSError.serverNotRunning
         }
@@ -132,10 +132,13 @@ final class TTSEngine {
         request.timeoutInterval = 30
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "text": text,
             "voice": voice ?? defaultVoice
         ]
+        if abs(speed - 1.0) > 0.01 {
+            body["speed"] = speed
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
         let (data, response) = try await URLSession.shared.data(for: request)

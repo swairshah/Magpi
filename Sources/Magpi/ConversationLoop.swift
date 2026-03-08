@@ -49,6 +49,16 @@ final class ConversationLoop: ObservableObject {
     @Published private(set) var audioLevel: Float = 0
     @Published private(set) var isAgentRunning = false
 
+    /// Speech playback speed (0.7–2.0). Persisted to UserDefaults.
+    @Published var speechSpeed: Double = {
+        let saved = UserDefaults.standard.double(forKey: "magpiSpeechSpeed")
+        return saved > 0 ? saved : 1.0
+    }() {
+        didSet {
+            UserDefaults.standard.set(speechSpeed, forKey: "magpiSpeechSpeed")
+        }
+    }
+
     /// When true (muted), mic is released entirely. Toggle with ⌘/.
     @Published var isMuted = true {
         didSet {
@@ -653,7 +663,7 @@ final class ConversationLoop: ObservableObject {
         transcript.addLog("🔊 Speaking: \"\(item.text)\"")
 
         do {
-            let audioData = try await ttsEngine.synthesize(text: item.text, voice: item.voice)
+            let audioData = try await ttsEngine.synthesize(text: item.text, voice: item.voice, speed: speechSpeed)
 
             guard state == .speaking else { return }
 
