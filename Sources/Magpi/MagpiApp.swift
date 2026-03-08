@@ -169,11 +169,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     appDelegate.conversationLoop?.stopSpeech()
                     print("Magpi: ⌘. Stop speech")
                 case 2: // Cmd+/ → toggle mute
-                    guard let loop = appDelegate.conversationLoop else { return }
-                    loop.isMuted.toggle()
-                    let status = loop.isMuted ? "MUTED" : "UNMUTED — listening"
-                    print("Magpi: ⌘/ \(status)")
-                    loop.transcript.addLog(loop.isMuted ? "🔇 Muted (⌘/)" : "🎙️ Unmuted (⌘/)")
+                    appDelegate.conversationLoop?.isMuted.toggle()
                 default:
                     break
                 }

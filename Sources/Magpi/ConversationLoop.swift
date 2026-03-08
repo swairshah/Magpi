@@ -49,8 +49,17 @@ final class ConversationLoop: ObservableObject {
     @Published private(set) var audioLevel: Float = 0
     @Published private(set) var isAgentRunning = false
 
-    /// When false (muted), mic input is ignored. Toggle with ⌘/.
-    @Published var isMuted = true
+    /// When true (muted), mic is released entirely. Toggle with ⌘/.
+    @Published var isMuted = true {
+        didSet {
+            guard oldValue != isMuted else { return }
+            if isMuted {
+                muteAudio()
+            } else {
+                unmuteAudio()
+            }
+        }
+    }
 
     // Components
     private let audioCapture = AudioCaptureSession()
@@ -120,25 +129,15 @@ final class ConversationLoop: ObservableObject {
             // Start Pi RPC conversation agent
             try startConversationAgent()
 
-            // Start audio capture
+            // Check mic permission before unmuting
             guard await AudioCaptureSession.checkPermission() else {
                 state = .error("Microphone permission denied")
                 return
             }
 
-            // Start audio capture (with voice processing / AEC)
-            try audioCapture.start()
-
-            // Attach the audio player to the shared engine so that
-            // TTS playback goes through the voice-processed output
-            // and macOS can subtract it from the mic input (AEC).
-            if let engine = audioCapture.engine {
-                audioPlayer.attach(to: engine)
-            }
-
             state = .idle
 
-            // Auto-unmute on start
+            // Unmute — this starts audio capture and attaches the player for AEC
             isMuted = false
 
             print("Magpi: Conversation loop started ✓")
@@ -361,6 +360,42 @@ final class ConversationLoop: ObservableObject {
                     try? startConversationAgent()
                 }
             }
+        }
+    }
+
+    // MARK: - Mute / Unmute
+
+    /// Stop audio capture entirely — releases the mic so macOS
+    /// removes the orange recording indicator.
+    private func muteAudio() {
+        audioPlayer.stop()
+        clearSpeechQueue()
+        audioCapture.stop()
+        sileroVAD?.reset()
+        audioBuffer.reset()
+        audioLevel = 0
+        if state == .listening || state == .turnCheck || state == .speaking {
+            state = .idle
+        }
+        print("Magpi: 🔇 Muted — mic released")
+        transcript.addLog("🔇 Muted (⌘/)")
+    }
+
+    /// Restart audio capture and re-attach the audio player for AEC.
+    private func unmuteAudio() {
+        do {
+            try audioCapture.start()
+            if let engine = audioCapture.engine {
+                audioPlayer.attach(to: engine)
+            }
+            sileroVAD?.reset()
+            audioBuffer.reset()
+            bargeInChunkCount = 0
+            print("Magpi: 🎙️ Unmuted — mic active")
+            transcript.addLog("🎙️ Unmuted (⌘/)")
+        } catch {
+            print("Magpi: Failed to unmute: \(error)")
+            isMuted = true
         }
     }
 
