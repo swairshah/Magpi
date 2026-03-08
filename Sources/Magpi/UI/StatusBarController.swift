@@ -40,8 +40,6 @@ final class StatusBarController {
         if let button = statusItem.button {
             button.action = #selector(togglePopover)
             button.target = self
-            // Right-click shows the fallback NSMenu
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
     }
     
@@ -65,20 +63,21 @@ final class StatusBarController {
         
         popover = NSPopover()
         popover.contentSize = NSSize(width: 320, height: 400)
-        popover.behavior = .transient
+        popover.behavior = .semitransient  // More reliable click handling than .transient
         popover.contentViewController = hostingController
+        popover.delegate = popoverDelegate
+    }
+    
+    /// Cleans up the event monitor when the popover closes by any means
+    /// (transient auto-close, Escape key, etc.), not just our closePopover().
+    private lazy var popoverDelegate = PopoverDelegate { [weak self] in
+        if let monitor = self?.eventMonitor {
+            NSEvent.removeMonitor(monitor)
+            self?.eventMonitor = nil
+        }
     }
     
     @objc private func togglePopover(_ sender: NSStatusBarButton) {
-        let event = NSApp.currentEvent
-        
-        // Right-click → show simple context menu
-        if event?.type == .rightMouseUp {
-            showContextMenu()
-            return
-        }
-        
-        // Left-click → toggle popover
         if popover.isShown {
             closePopover()
         } else {
@@ -89,6 +88,12 @@ final class StatusBarController {
     private func showPopover() {
         guard let button = statusItem.button else { return }
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        
+        // Ensure the popover window is key so buttons respond to clicks.
+        // Without this, the first click may just activate the window
+        // without forwarding the event to the button, appearing frozen.
+        NSApp.activate(ignoringOtherApps: true)
+        popover.contentViewController?.view.window?.makeKey()
         
         // Close when clicking outside
         eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
@@ -101,51 +106,6 @@ final class StatusBarController {
         if let monitor = eventMonitor {
             NSEvent.removeMonitor(monitor)
             eventMonitor = nil
-        }
-    }
-    
-    /// Fallback context menu on right-click.
-    private func showContextMenu() {
-        let menu = NSMenu()
-        
-        let muteItem = NSMenuItem(
-            title: (conversationLoop?.isMuted ?? true) ? "Unmute" : "Mute",
-            action: #selector(toggleMute),
-            keyEquivalent: ""
-        )
-        muteItem.target = self
-        menu.addItem(muteItem)
-        
-        let stopItem = NSMenuItem(title: "Stop Speech", action: #selector(stopSpeech), keyEquivalent: "")
-        stopItem.target = self
-        menu.addItem(stopItem)
-        
-        menu.addItem(NSMenuItem.separator())
-        
-        let windowItem = NSMenuItem(title: "Show Window", action: #selector(showWindow), keyEquivalent: "")
-        windowItem.target = self
-        menu.addItem(windowItem)
-        
-        let transcriptVisible = transcriptPanel?.isVisible ?? false
-        let transcriptItem = NSMenuItem(
-            title: transcriptVisible ? "Hide Transcript" : "Show Transcript",
-            action: #selector(toggleTranscript),
-            keyEquivalent: ""
-        )
-        transcriptItem.target = self
-        menu.addItem(transcriptItem)
-        
-        menu.addItem(NSMenuItem.separator())
-        
-        let quitItem = NSMenuItem(title: "Quit Magpi", action: #selector(quit), keyEquivalent: "q")
-        quitItem.target = self
-        menu.addItem(quitItem)
-        
-        statusItem.menu = menu
-        statusItem.button?.performClick(nil)
-        // Clear the menu after showing so left-click goes back to popover
-        DispatchQueue.main.async { [weak self] in
-            self?.statusItem.menu = nil
         }
     }
     
@@ -227,5 +187,20 @@ final class StatusBarController {
     
     @objc private func quit() {
         onQuit?()
+    }
+}
+
+// MARK: - Popover Delegate
+
+/// Handles popover lifecycle events (close from any source).
+private class PopoverDelegate: NSObject, NSPopoverDelegate {
+    let onClose: () -> Void
+    
+    init(onClose: @escaping () -> Void) {
+        self.onClose = onClose
+    }
+    
+    func popoverDidClose(_ notification: Notification) {
+        onClose()
     }
 }

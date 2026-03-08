@@ -46,7 +46,9 @@ final class ConversationLoop: ObservableObject {
     }
 
     @Published private(set) var state: State = .idle
-    @Published private(set) var audioLevel: Float = 0
+    /// Audio input level (0–1). Not @Published to avoid triggering
+    /// SwiftUI re-renders ~12x/sec on every observing view.
+    private(set) var audioLevel: Float = 0
     @Published private(set) var isAgentRunning = false
 
     /// Speech playback speed (0.7–2.0). Persisted to UserDefaults.
